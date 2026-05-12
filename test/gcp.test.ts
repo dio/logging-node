@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { createGcpSink } from "../src/gcp"
 
 describe("GCP Sink", () => {
@@ -177,5 +177,126 @@ describe("GCP Sink", () => {
     } finally {
       console.log = originalLog
     }
+  })
+
+  describe("default value resolution", () => {
+    // Each test snapshots and restores process.env so they don't leak.
+    const originalEnv = { ...process.env }
+    let originalLog: typeof console.log
+    const captured: string[] = []
+
+    beforeEach(() => {
+      // Clear all relevant env vars to start from a known state.
+      for (const k of [
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
+        "K_SERVICE",
+        "K_REVISION",
+        "OTEL_SERVICE_NAME",
+        "OTEL_SERVICE_VERSION",
+        "npm_package_name",
+        "npm_package_version",
+      ]) {
+        delete process.env[k]
+      }
+      captured.length = 0
+      originalLog = console.log
+      console.log = (line: string) => {
+        captured.push(line)
+      }
+    })
+
+    afterEach(() => {
+      console.log = originalLog
+      process.env = { ...originalEnv }
+    })
+
+    it("falls back to GOOGLE_CLOUD_PROJECT for trace correlation", () => {
+      process.env.GOOGLE_CLOUD_PROJECT = "env-project"
+      const sink = createGcpSink()
+      sink.write("info", "test", { trace_id: "abc123" })
+      const entry = JSON.parse(captured[0])
+      expect(entry["logging.googleapis.com/trace"]).toBe("projects/env-project/traces/abc123")
+    })
+
+    it("falls back to GCLOUD_PROJECT when GOOGLE_CLOUD_PROJECT is unset", () => {
+      process.env.GCLOUD_PROJECT = "legacy-project"
+      const sink = createGcpSink()
+      sink.write("info", "test", { trace_id: "xyz" })
+      const entry = JSON.parse(captured[0])
+      expect(entry["logging.googleapis.com/trace"]).toBe("projects/legacy-project/traces/xyz")
+    })
+
+    it("falls back to OTEL_SERVICE_NAME and OTEL_SERVICE_VERSION", () => {
+      process.env.OTEL_SERVICE_NAME = "otel-svc"
+      process.env.OTEL_SERVICE_VERSION = "otel-v1"
+      const sink = createGcpSink()
+      sink.write("error", "boom", { err: new Error("x") })
+      const entry = JSON.parse(captured[0])
+      expect(entry.serviceContext).toEqual({ service: "otel-svc", version: "otel-v1" })
+    })
+
+    it("K_SERVICE/K_REVISION take priority over OTEL_*", () => {
+      process.env.K_SERVICE = "cloud-run-svc"
+      process.env.K_REVISION = "rev-42"
+      process.env.OTEL_SERVICE_NAME = "should-be-ignored"
+      const sink = createGcpSink()
+      sink.write("error", "boom", { err: new Error("x") })
+      const entry = JSON.parse(captured[0])
+      expect(entry.serviceContext).toEqual({
+        service: "cloud-run-svc",
+        version: "rev-42",
+      })
+    })
+
+    it("uses opts.name as service when no env vars are set", () => {
+      const sink = createGcpSink({ name: "from-opts" })
+      sink.write("error", "boom", { err: new Error("x") })
+      const entry = JSON.parse(captured[0])
+      expect(entry.serviceContext?.service).toBe("from-opts")
+      expect(entry.serviceContext?.version).toBe("unknown")
+    })
+
+    it("falls back to npm_package_name and npm_package_version", () => {
+      process.env.npm_package_name = "my-pkg"
+      process.env.npm_package_version = "1.2.3"
+      const sink = createGcpSink()
+      sink.write("error", "boom", { err: new Error("x") })
+      const entry = JSON.parse(captured[0])
+      expect(entry.serviceContext).toEqual({ service: "my-pkg", version: "1.2.3" })
+    })
+
+    it("explicit opts override all env fallbacks", () => {
+      process.env.K_SERVICE = "cloud-run"
+      process.env.GOOGLE_CLOUD_PROJECT = "env-proj"
+      const sink = createGcpSink({
+        serviceName: "explicit-svc",
+        serviceVersion: "explicit-v1",
+        project: "explicit-proj",
+      })
+      sink.write("error", "boom", { err: new Error("x"), trace_id: "t1" })
+      const entry = JSON.parse(captured[0])
+      expect(entry["logging.googleapis.com/trace"]).toBe("projects/explicit-proj/traces/t1")
+      expect(entry.serviceContext).toEqual({
+        service: "explicit-svc",
+        version: "explicit-v1",
+      })
+    })
+
+    it("skips trace correlation when no project is resolvable", () => {
+      const sink = createGcpSink()
+      sink.write("info", "test", { trace_id: "abc" })
+      const entry = JSON.parse(captured[0])
+      expect(entry["logging.googleapis.com/trace"]).toBeUndefined()
+      // The raw trace_id stays in the entry as a regular field
+      expect(entry.trace_id).toBe("abc")
+    })
+
+    it("final fallback to 'unknown' when nothing is available", () => {
+      const sink = createGcpSink()
+      sink.write("error", "boom", { err: new Error("x") })
+      const entry = JSON.parse(captured[0])
+      expect(entry.serviceContext).toEqual({ service: "unknown", version: "unknown" })
+    })
   })
 })

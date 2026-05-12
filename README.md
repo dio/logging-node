@@ -286,6 +286,104 @@ log.info({ port: process.env.PORT }, "server starting")
 
 Logs land in Cloud Logging under your service, filterable by severity, with `trace` linked to Cloud Trace and errors flowing into Error Reporting — no separate exporter needed.
 
+### Default value resolution
+
+You can omit `project`, `serviceName`, and `serviceVersion` if the runtime sets the right env vars. The fallback chain (v0.2.1+):
+
+**Project** (for trace correlation):
+
+1. `opts.project`
+2. `GOOGLE_CLOUD_PROJECT` (App Engine, Cloud Functions, gcloud CLI, anything that uses gcloud auth)
+3. `GCLOUD_PROJECT` (legacy)
+
+**Service name** (for Error Reporting):
+
+1. `opts.serviceName`
+2. `K_SERVICE` (Cloud Run, automatic)
+3. `OTEL_SERVICE_NAME` (OpenTelemetry standard — GKE, anywhere else)
+4. `opts.name` (the logger's own name)
+5. `npm_package_name` (set by npm/bun when running scripts)
+6. `"unknown"`
+
+**Service version**:
+
+1. `opts.serviceVersion`
+2. `K_REVISION` (Cloud Run, automatic)
+3. `OTEL_SERVICE_VERSION`
+4. `npm_package_version`
+5. `"unknown"`
+
+### GKE deployment (the common case)
+
+On GKE, set the OpenTelemetry env vars in your Deployment via the Downward API. The logger picks them up automatically and they also feed the OTel SDK, so service name stays consistent across logs, traces, and metrics.
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraser-auth
+  labels:
+    app.kubernetes.io/name: fraser-auth
+    app.kubernetes.io/version: "1.2.3"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fraser-auth
+        app.kubernetes.io/version: "1.2.3"
+    spec:
+      containers:
+        - name: app
+          image: gcr.io/my-project/fraser-auth:1.2.3
+          env:
+            # The two OTel vars are what the logger reads.
+            - name: OTEL_SERVICE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['app.kubernetes.io/name']"
+            - name: OTEL_SERVICE_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['app.kubernetes.io/version']"
+            # GCP project — needed for trace correlation in Cloud Logging.
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "my-gcp-project"
+            # Optional: pod / namespace for ad-hoc filtering in the Cloud Logging UI.
+            # These don't affect Error Reporting; they're just extra fields on each log.
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+```
+
+Code side:
+
+```ts
+import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
+
+setGlobalLogger(createGcpLogger()) // zero config
+```
+
+Cloud Logging's GKE log scraper auto-tags entries with `resource.type: k8s_container` and adds pod/namespace/cluster labels at ingestion. You don't need to emit those yourself — the scraper handles it. The Downward API env vars above are for the bits the scraper can't infer (your application's service name and version).
+
+### Cloud Run deployment
+
+Cloud Run injects `K_SERVICE` and `K_REVISION` automatically, so this works with no config beyond the project:
+
+```ts
+setGlobalLogger(createGcpLogger({ project: process.env.GOOGLE_CLOUD_PROJECT }))
+```
+
+Or if you set `GOOGLE_CLOUD_PROJECT` in the service env:
+
+```ts
+setGlobalLogger(createGcpLogger())
+```
+
+### What's not auto-detected
+
+GCP metadata server auto-detection (Cloud Run, GKE, GCE) is deliberately out of scope for v0.2.x. The sink is synchronous; the metadata server needs an async HTTP call on init. One line of YAML to set `GOOGLE_CLOUD_PROJECT` beats a 200ms cold-start round-trip.
+
 ### Known limitations (v0.1.x)
 
 The adapter covers the cases that _break_ if missing (severity, trace ID format, Error Reporting). Some Cloud Logging UI niceties aren't wired yet — see [#13](https://github.com/dio/logging-node/issues/13) for the v0.2.0 roadmap (`httpRequest` filtering, `operation` log grouping, `labels` indexing, source location, project auto-detection).
