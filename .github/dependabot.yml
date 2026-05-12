@@ -1,0 +1,32 @@
+# Keep GitHub Actions and npm dependencies up to date.
+# Actions are pinned to commit SHAs; Dependabot updates the SHA + the tag
+# in the trailing comment together.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      otel:
+        patterns:
+          - "@opentelemetry/*"
+      dev-tooling:
+        patterns:
+          - "eslint*"
+          - "@typescript-eslint/*"
+          - "prettier"
+          - "tsup"
+          - "typescript"
+          - "vitest"

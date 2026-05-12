@@ -1,0 +1,8 @@
+dist
+node_modules
+coverage
+*.tsbuildinfo
+pnpm-lock.yaml
+examples/**/.next
+examples/**/node_modules
+examples/**/dist

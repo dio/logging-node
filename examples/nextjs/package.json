@@ -1,0 +1,24 @@
+{
+  "name": "nextjs-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p ${PORT:-3000}",
+    "build": "next build",
+    "start": "next start -p ${PORT:-3000}"
+  },
+  "dependencies": {
+    "next": "^15.0.3",
+    "react": "^19",
+    "react-dom": "^19",
+    "@opentelemetry/api": "^1.9",
+    "@vercel/otel": "^1",
+    "@tetratelabs/logging": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/node": "^22",
+    "typescript": "^5.6"
+  }
+}

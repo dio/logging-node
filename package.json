@@ -1,0 +1,104 @@
+{
+  "name": "@tetratelabs/logging",
+  "version": "0.1.0",
+  "description": "Structured logging with guaranteed metrics, built on pino and OpenTelemetry.",
+  "type": "module",
+  "packageManager": "pnpm@9.1.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dio/logging-node.git"
+  },
+  "homepage": "https://github.com/dio/logging-node#readme",
+  "bugs": {
+    "url": "https://github.com/dio/logging-node/issues"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "logging",
+    "pino",
+    "opentelemetry",
+    "otel",
+    "metrics",
+    "nextjs",
+    "edge",
+    "bun",
+    "hono"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "edge-light": "./dist/edge.js",
+      "workerd": "./dist/edge.js",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "default": "./dist/index.js"
+    },
+    "./gcp": {
+      "types": "./dist/gcp.d.ts",
+      "import": "./dist/gcp.js",
+      "require": "./dist/gcp.cjs",
+      "default": "./dist/gcp.js"
+    },
+    "./hono": {
+      "types": "./dist/hono.d.ts",
+      "import": "./dist/hono.js",
+      "require": "./dist/hono.cjs",
+      "default": "./dist/hono.js"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "RATIONALE.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier -w .",
+    "format:check": "prettier -c .",
+    "e2e": "vitest run -c e2e/vitest.config.ts"
+  },
+  "dependencies": {
+    "@opentelemetry/context-async-hooks": "^1.27",
+    "pino": "^9"
+  },
+  "peerDependencies": {
+    "@opentelemetry/api": ">=1.9 <2",
+    "hono": ">=4 <5"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "^1.9",
+    "@opentelemetry/resources": "^1.27",
+    "@opentelemetry/sdk-metrics": "^1.27",
+    "@opentelemetry/sdk-trace-base": "^1.27",
+    "@typescript-eslint/eslint-plugin": "^8",
+    "@typescript-eslint/parser": "^8",
+    "@types/node": "^22",
+    "eslint": "^9",
+    "hono": "^4",
+    "prettier": "^3",
+    "tsup": "^8",
+    "typescript": "^5.6",
+    "vitest": "^2"
+  }
+}
