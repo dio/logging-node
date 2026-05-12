@@ -33,6 +33,7 @@ Project (for trace correlation):
 1. `opts.project`
 2. `GOOGLE_CLOUD_PROJECT` (App Engine, Cloud Functions, gcloud CLI)
 3. `GCLOUD_PROJECT` (legacy)
+4. GCP metadata server `http://metadata.google.internal` (Cloud Run, GKE, GCE, App Engine flex). Async detection at logger init with a 200ms timeout. Result cached for the process lifetime (success and failure). Disable with `projectAutoDetect: false`.
 
 Service name (for Error Reporting):
 
@@ -189,4 +190,4 @@ Cloud Logging's GKE log scraper auto-tags entries with `resource.type: k8s_conta
 
 ## Known limitations
 
-GCP metadata server project auto-detection is not yet implemented. Coming in the next PR. v0.3.x requires `GOOGLE_CLOUD_PROJECT` env (or explicit `project` option). Cloud Run sets this automatically; on GKE wire it through the Downward API.
+None significant for v0.3.0. Project auto-detection from the metadata server works on Cloud Run, GKE, GCE, and App Engine flex.
