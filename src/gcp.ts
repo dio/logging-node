@@ -124,51 +124,66 @@ function pinoLevelToGcpSeverity(level: Level): string {
   }
 }
 
-/**
- * GCP metadata server endpoint for the active project ID. Reachable
- * from Cloud Run, GKE, GCE, App Engine flex. Returns plain text.
- *
- * The async detection runs once per process. Success and failure are
- * both cached for the process lifetime so dev laptops don't pay the
- * timeout cost on every log call.
- */
-const METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/project/project-id"
+// GCP project ID auto-detection via the official `gcp-metadata` package.
+//
+// We could hand-roll a fetch against http://metadata.google.internal but
+// the official client gives us:
+//   - GCE_METADATA_HOST env override (gcloud emulator + tests)
+//   - On-GCE detection separate from key fetching (gcpMetadata.isAvailable())
+//   - Whatever Google considers "correct" behaviour going forward
+//
+// Same library used internally by google-auth-library and the official
+// Node SDKs.
+//
+// The detection runs at most once per process. Both success and failure
+// are cached for the process lifetime so non-GCP environments do not pay
+// the timeout cost on every log call.
 const METADATA_TIMEOUT_MS = 200
 
+// Test seam: lets tests substitute the project-id fetcher without
+// fighting gcp-metadata's own internal caches.
+type ProjectFetcher = (timeoutMs: number) => Promise<string | undefined>
+
+const defaultProjectFetcher: ProjectFetcher = async (timeoutMs) => {
+  // Lazy-import: only load gcp-metadata when auto-detect is actually
+  // triggered. Edge runtimes that never call createGcpSink avoid the cost.
+  const gcp = await import("gcp-metadata")
+  // gcp-metadata uses its own timeout via the gaxios layer. We wrap with
+  // AbortSignal.timeout so the contract (200ms max) holds even if the
+  // library's defaults change.
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    // project() returns the project ID as a string. Internally it talks
+    // to /computeMetadata/v1/project/project-id with the Metadata-Flavor
+    // header.
+    const id = await gcp.project()
+    const trimmed = String(id ?? "").trim()
+    return trimmed || undefined
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+let projectFetcher: ProjectFetcher = defaultProjectFetcher
 let metadataProjectCache: { value: string | undefined } | undefined
 let metadataDetectionInFlight: Promise<string | undefined> | undefined
 
-/**
- * Detect the GCP project ID from the metadata server. Returns undefined
- * on any failure (DNS, timeout, non-2xx response, not running on GCP).
- *
- * Cached: subsequent calls return the same result without retrying.
- * The 200ms timeout prevents non-GCP environments from blocking.
- */
 async function detectProjectFromMetadata(): Promise<string | undefined> {
   if (metadataProjectCache) return metadataProjectCache.value
   if (metadataDetectionInFlight) return metadataDetectionInFlight
 
   metadataDetectionInFlight = (async () => {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), METADATA_TIMEOUT_MS)
     try {
-      const res = await fetch(METADATA_URL, {
-        headers: { "Metadata-Flavor": "Google" },
-        signal: controller.signal,
-      })
-      if (!res.ok) {
-        metadataProjectCache = { value: undefined }
-        return undefined
-      }
-      const text = (await res.text()).trim()
-      metadataProjectCache = { value: text || undefined }
-      return metadataProjectCache.value
+      const value = await projectFetcher(METADATA_TIMEOUT_MS)
+      metadataProjectCache = { value }
+      return value
     } catch {
       metadataProjectCache = { value: undefined }
       return undefined
     } finally {
-      clearTimeout(timer)
       metadataDetectionInFlight = undefined
     }
   })()
@@ -183,6 +198,17 @@ async function detectProjectFromMetadata(): Promise<string | undefined> {
 export function _resetMetadataProjectCacheForTests(): void {
   metadataProjectCache = undefined
   metadataDetectionInFlight = undefined
+}
+
+/**
+ * Substitute the project-id fetcher used by auto-detection. Pass undefined
+ * to restore the default (which uses the `gcp-metadata` package).
+ * Test-only.
+ *
+ * @internal
+ */
+export function _setProjectFetcherForTests(fetcher?: ProjectFetcher): void {
+  projectFetcher = fetcher ?? defaultProjectFetcher
 }
 
 /**
