@@ -46,44 +46,39 @@ log.info("quick message")
 
 ## Next.js setup
 
-### 1. `next.config.js`
+See [examples/nextjs/README.md](./examples/nextjs/README.md) for a working example covering edge middleware, Node.js API routes, and the OpenTelemetry instrumentation hook.
 
-Mark pino and this package as external to avoid bundling issues:
+Short version:
 
 ```js
+// next.config.js
 module.exports = {
   serverExternalPackages: ["@tetratelabs/logging", "pino", "thread-stream"],
 }
 ```
 
-### 2. `instrumentation.ts` (root)
-
-Wire OTel and the logger at server boot:
-
 ```ts
+// instrumentation.ts
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { registerOTel } = await import("@vercel/otel")
     registerOTel({ serviceName: "myapp" })
-
     const { createLogger, setGlobalLogger } = await import("@tetratelabs/logging")
     setGlobalLogger(createLogger({ name: "myapp", level: process.env.LOG_LEVEL ?? "info" }))
   }
 }
 ```
 
-### 3. Use anywhere
-
-In route handlers, server actions, or RSCs:
-
 ```ts
-import { withAttrs, log } from "@tetratelabs/logging"
-
-export default async function Page({ params }: { params: { id: string } }) {
-  return await withAttrs({ request_id: params.id }, async () => {
-    log.info("loading page")
-    return <Content />
-  })
+// middleware.ts (edge)
+import { withLogAttrs, log } from "@tetratelabs/logging"
+export default async function middleware(req: Request) {
+  return await withLogAttrs(
+    { request_id: req.headers.get("x-request-id") ?? crypto.randomUUID() },
+    async () => {
+      /* ... */
+    },
+  )
 }
 ```
 
@@ -269,75 +264,12 @@ setGlobalLogger(createLogger({ name: "app" }))
 
 ## GCP / Cloud Logging
 
-For services running on Google Cloud (Cloud Run, GKE, Cloud Functions), use the `@tetratelabs/logging/gcp` subpath to emit logs in [Cloud Logging's structured JSON format](https://cloud.google.com/logging/docs/structured-logging).
+See [docs/gcp.md](./docs/gcp.md) for the full GCP adapter docs: severity mapping, trace correlation, Error Reporting payloads, structured fields (`httpRequest`, `operation`, `labelKeys`, `sourceLocation`, `trace_sampled`), and Cloud Run / GKE deployment patterns.
 
-### Hono on GCP — request_id correlation
-
-The Hono middleware extracts `request_id` from `x-cloud-trace-context` by default (GCP's Load Balancer / Cloud Run propagator), falling back to `x-request-id`. The trace ID portion (the part before `/SPAN_ID;o=FLAGS`) becomes `request_id`, so log entries correlate 1:1 with Cloud Trace spans in the Cloud Logging UI:
-
-```ts
-import { loggingMiddleware } from "@tetratelabs/logging/hono"
-
-// Defaults work for GCP — tries x-cloud-trace-context then x-request-id.
-// request_id, method, path are auto-attached to logs (never to metric labels).
-app.use(loggingMiddleware())
-
-// Add request-scoped attrs. Use metricAttrs for bounded labels and
-// logAttrs for unbounded fields. The middleware enforces the split.
-app.use(
-  loggingMiddleware({
-    metricAttrs: (c) => ({
-      // bounded: lands on log AND counter labels
-      customer: c.req.header("x-customer-id") ?? "unknown",
-      environment: "prod",
-    }),
-    logAttrs: (c) => ({
-      // unbounded: lands on log ONLY, never on counters
-      user_agent: c.req.header("user-agent") ?? "",
-    }),
-  }),
-)
-
-// Customize the request_id header priority:
-app.use(
-  loggingMiddleware({
-    requestIdHeaders: ["x-correlation-id", "x-cloud-trace-context"],
-  }),
-)
-```
+Short version:
 
 ```ts
 import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
-
-setGlobalLogger(
-  createGcpLogger({
-    name: "myservice",
-    level: process.env.LOG_LEVEL ?? "info",
-    project: process.env.GOOGLE_CLOUD_PROJECT, // required for trace correlation
-    serviceName: process.env.K_SERVICE, // for Error Reporting (auto on Cloud Run)
-    serviceVersion: process.env.K_REVISION, // for Error Reporting (auto on Cloud Run)
-  }),
-)
-```
-
-### What it does
-
-- Maps levels to GCP severity (`DEBUG | INFO | WARNING | ERROR`) — the Cloud Logging UI buckets them correctly.
-- Renames `msg` → `message` and emits ISO-8601 `timestamp` per the [LogEntry spec](https://cloud.google.com/logging/docs/reference/v2/rest/v2/LogEntry).
-- When `project` is set and a trace is active, rewrites `trace_id`/`span_id` into:
-  - `logging.googleapis.com/trace` = `projects/<project>/traces/<trace_id>`
-  - `logging.googleapis.com/spanId`
-  - `logging.googleapis.com/trace_sampled`
-- On `log.error(msg, err)`, emits the [Cloud Error Reporting](https://cloud.google.com/error-reporting/docs/formatting-error-messages) payload (`@type`, `stack_trace`, `serviceContext`) so errors auto-appear in the Error Reporting console.
-- Falls back to `K_SERVICE` / `K_REVISION` env (Cloud Run sets these automatically) when `serviceName`/`serviceVersion` aren't passed.
-
-### Cloud Run example
-
-Cloud Run injects `K_SERVICE`, `K_REVISION`, and runs with OTel auto-instrumentation if you enable it. Minimal wiring:
-
-```ts
-// index.ts
-import { createGcpLogger, setGlobalLogger, log } from "@tetratelabs/logging/gcp"
 
 setGlobalLogger(
   createGcpLogger({
@@ -345,113 +277,23 @@ setGlobalLogger(
     project: process.env.GOOGLE_CLOUD_PROJECT,
   }),
 )
-
-log.info({ port: process.env.PORT }, "server starting")
 ```
 
-Logs land in Cloud Logging under your service, filterable by severity, with `trace` linked to Cloud Trace and errors flowing into Error Reporting — no separate exporter needed.
+On Cloud Run, omit `project` and the sink reads `GOOGLE_CLOUD_PROJECT` from env (Cloud Run sets it). On GKE, wire it through the Downward API. See [docs/gcp.md](./docs/gcp.md) for the full pattern.
 
-### Default value resolution
+## Hono middleware
 
-You can omit `project`, `serviceName`, and `serviceVersion` if the runtime sets the right env vars. The fallback chain (v0.2.1+):
+See [docs/hono.md](./docs/hono.md) for the full Hono middleware docs: `metricAttrs` / `logAttrs` cardinality split, request ID resolution, operation grouping, structured HTTP request emission.
 
-**Project** (for trace correlation):
-
-1. `opts.project`
-2. `GOOGLE_CLOUD_PROJECT` (App Engine, Cloud Functions, gcloud CLI, anything that uses gcloud auth)
-3. `GCLOUD_PROJECT` (legacy)
-
-**Service name** (for Error Reporting):
-
-1. `opts.serviceName`
-2. `K_SERVICE` (Cloud Run, automatic)
-3. `OTEL_SERVICE_NAME` (OpenTelemetry standard — GKE, anywhere else)
-4. `opts.name` (the logger's own name)
-5. `npm_package_name` (set by npm/bun when running scripts)
-6. `"unknown"`
-
-**Service version**:
-
-1. `opts.serviceVersion`
-2. `K_REVISION` (Cloud Run, automatic)
-3. `OTEL_SERVICE_VERSION`
-4. `npm_package_version`
-5. `"unknown"`
-
-### GKE deployment (the common case)
-
-On GKE, set the OpenTelemetry env vars in your Deployment via the Downward API. The logger picks them up automatically and they also feed the OTel SDK, so service name stays consistent across logs, traces, and metrics.
-
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: fraser-auth
-  labels:
-    app.kubernetes.io/name: fraser-auth
-    app.kubernetes.io/version: "1.2.3"
-spec:
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: fraser-auth
-        app.kubernetes.io/version: "1.2.3"
-    spec:
-      containers:
-        - name: app
-          image: gcr.io/my-project/fraser-auth:1.2.3
-          env:
-            # The two OTel vars are what the logger reads.
-            - name: OTEL_SERVICE_NAME
-              valueFrom:
-                fieldRef:
-                  fieldPath: "metadata.labels['app.kubernetes.io/name']"
-            - name: OTEL_SERVICE_VERSION
-              valueFrom:
-                fieldRef:
-                  fieldPath: "metadata.labels['app.kubernetes.io/version']"
-            # GCP project — needed for trace correlation in Cloud Logging.
-            - name: GOOGLE_CLOUD_PROJECT
-              value: "my-gcp-project"
-            # Optional: pod / namespace for ad-hoc filtering in the Cloud Logging UI.
-            # These don't affect Error Reporting; they're just extra fields on each log.
-            - name: POD_NAME
-              valueFrom: { fieldRef: { fieldPath: metadata.name } }
-            - name: POD_NAMESPACE
-              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-```
-
-Code side:
+Short version:
 
 ```ts
-import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
+import { loggingMiddleware } from "@tetratelabs/logging/hono"
 
-setGlobalLogger(createGcpLogger()) // zero config
+app.use("*", loggingMiddleware())
+// request_id, method, path attached to every log; httpRequest + operation
+// emitted automatically when paired with createGcpLogger.
 ```
-
-Cloud Logging's GKE log scraper auto-tags entries with `resource.type: k8s_container` and adds pod/namespace/cluster labels at ingestion. You don't need to emit those yourself — the scraper handles it. The Downward API env vars above are for the bits the scraper can't infer (your application's service name and version).
-
-### Cloud Run deployment
-
-Cloud Run injects `K_SERVICE` and `K_REVISION` automatically, so this works with no config beyond the project:
-
-```ts
-setGlobalLogger(createGcpLogger({ project: process.env.GOOGLE_CLOUD_PROJECT }))
-```
-
-Or if you set `GOOGLE_CLOUD_PROJECT` in the service env:
-
-```ts
-setGlobalLogger(createGcpLogger())
-```
-
-### What's not auto-detected
-
-GCP metadata server auto-detection (Cloud Run, GKE, GCE) is deliberately out of scope for v0.2.x. The sink is synchronous; the metadata server needs an async HTTP call on init. One line of YAML to set `GOOGLE_CLOUD_PROJECT` beats a 200ms cold-start round-trip.
-
-### Known limitations (v0.1.x)
-
-The adapter covers the cases that _break_ if missing (severity, trace ID format, Error Reporting). Some Cloud Logging UI niceties aren't wired yet — see [#13](https://github.com/dio/logging-node/issues/13) for the v0.2.0 roadmap (`httpRequest` filtering, `operation` log grouping, `labels` indexing, source location, project auto-detection).
 
 ## Design rationale
 

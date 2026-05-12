@@ -69,7 +69,7 @@ describe("GCP format e2e", () => {
       name: "test",
       level: "info",
       project: "test-proj",
-    }).with({ trace_id: "abc123", span_id: "def456" })
+    }).with({ trace_id: "abc123", span_id: "def456", trace_sampled: true })
 
     log.info("traced")
 

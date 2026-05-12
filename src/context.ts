@@ -3,6 +3,7 @@ import {
   createContextKey,
   trace,
   isSpanContextValid,
+  TraceFlags,
   type Context,
 } from "@opentelemetry/api"
 import type { Attrs } from "./types.js"
@@ -22,6 +23,27 @@ import type { Attrs } from "./types.js"
 // counters with per-request values.
 const ATTRS_KEY = createContextKey("@tetratelabs/logging:attrs")
 const LOG_ATTRS_KEY = createContextKey("@tetratelabs/logging:log-attrs")
+const OPERATION_KEY = createContextKey("@tetratelabs/logging:operation")
+
+// GCP Cloud Logging "operation" grouping. When set on the context, the
+// GCP sink emits logging.googleapis.com/operation on every log inside.
+// The first/last flags are managed by the Hono middleware (it marks the
+// bookend log lines so the Cloud Logging UI groups the request cleanly).
+export interface OperationInfo {
+  id: string
+  producer?: string
+  first?: boolean
+  last?: boolean
+}
+
+export function getOperation(ctx?: Context): OperationInfo | undefined {
+  const activeCtx = ctx ?? context.active()
+  return activeCtx.getValue(OPERATION_KEY) as OperationInfo | undefined
+}
+
+export function setOperationOnContext(ctx: Context, op: OperationInfo): Context {
+  return ctx.setValue(OPERATION_KEY, op)
+}
 
 export function getAttrs(ctx?: Context): Attrs {
   const activeCtx = ctx ?? context.active()
@@ -69,14 +91,17 @@ export function withLogAttrs<T>(attrs: Attrs, fn: () => T): T {
   return context.with(ctx, fn)
 }
 
-export function extractTraceFields(ctx: Context): Record<string, string> {
-  const fields: Record<string, string> = {}
+export function extractTraceFields(ctx: Context): Record<string, string | boolean> {
+  const fields: Record<string, string | boolean> = {}
   const span = trace.getSpan(ctx)
   if (span) {
     const sc = span.spanContext()
     if (isSpanContextValid(sc)) {
       fields.trace_id = sc.traceId
       fields.span_id = sc.spanId
+      // Real sampled flag from the SpanContext, not a hard-coded true.
+      // Used by the GCP sink to populate logging.googleapis.com/trace_sampled.
+      fields.trace_sampled = (sc.traceFlags & TraceFlags.SAMPLED) !== 0
     }
   }
   return fields
