@@ -286,6 +286,50 @@ log.info({ port: process.env.PORT }, "server starting")
 
 Logs land in Cloud Logging under your service, filterable by severity, with `trace` linked to Cloud Trace and errors flowing into Error Reporting — no separate exporter needed.
 
+### Default value resolution
+
+You can omit `project`, `serviceName`, and `serviceVersion` if the runtime sets the right env vars. The fallback chain (v0.2.1+):
+
+**Project** (for trace correlation):
+
+1. `opts.project`
+2. `GOOGLE_CLOUD_PROJECT` (App Engine, Cloud Functions, gcloud CLI, anything that uses gcloud auth)
+3. `GCLOUD_PROJECT` (legacy)
+
+**Service name** (for Error Reporting):
+
+1. `opts.serviceName`
+2. `K_SERVICE` (Cloud Run, automatic)
+3. `OTEL_SERVICE_NAME` (OpenTelemetry standard — GKE, anywhere else)
+4. `opts.name` (the logger's own name)
+5. `npm_package_name` (set by npm/bun when running scripts)
+6. `"unknown"`
+
+**Service version**:
+
+1. `opts.serviceVersion`
+2. `K_REVISION` (Cloud Run, automatic)
+3. `OTEL_SERVICE_VERSION`
+4. `npm_package_version`
+5. `"unknown"`
+
+This means **on Cloud Run you can call `createGcpLogger()` with no arguments** and get correct values. On GKE you set OTel env vars via the Downward API once in your Deployment manifest:
+
+```yaml
+# Deployment spec
+env:
+  - name: OTEL_SERVICE_NAME
+    value: "fraser-auth"
+  - name: OTEL_SERVICE_VERSION
+    valueFrom:
+      fieldRef:
+        fieldPath: "metadata.labels['app.kubernetes.io/version']"
+  - name: GOOGLE_CLOUD_PROJECT
+    value: "my-gcp-project"
+```
+
+GCP metadata server auto-detection (Cloud Run, GKE, GCE) is deliberately out of scope for v0.2.x because the sink is synchronous and the metadata server needs an async HTTP call on init. If your service can't set these vars, pass them explicitly.
+
 ### Known limitations (v0.1.x)
 
 The adapter covers the cases that _break_ if missing (severity, trace ID format, Error Reporting). Some Cloud Logging UI niceties aren't wired yet — see [#13](https://github.com/dio/logging-node/issues/13) for the v0.2.0 roadmap (`httpRequest` filtering, `operation` log grouping, `labels` indexing, source location, project auto-detection).
