@@ -125,6 +125,91 @@ await withAttrs({ customer_id: "acme" }, async () => {
 })
 ```
 
+## When to use what
+
+The library gives you three ways to attach attributes. Pick deliberately — `withAttrs` is the most powerful but also the most intrusive.
+
+| You want…                                                                        | Use                            | Example                                                     |
+| -------------------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------- |
+| Attach attrs to **one log line**                                                 | per-call `attrs` arg           | `log.info("ok", { user_id })`                               |
+| Attach attrs to **many calls in the same function**                              | `log.with(...)` (child logger) | `const reqLog = log.with({ request_id }); reqLog.info(...)` |
+| Attach attrs to **everything downstream**, including async fns you don't control | `withAttrs(...)`               | middleware sets `request_id`, every nested log inherits it  |
+
+### Rule of thumb
+
+> **Use `withAttrs` only at boundaries** — middleware, route handlers, the top of a request — where you set request-scoped attrs (`request_id`, `tenant`, `user_id`) **once**. Everywhere else, prefer plain `log.info(msg, attrs)` or `log.with(attrs)`.
+
+In practice this means **your business code almost never writes `withAttrs` directly**. The Hono middleware (`@tetratelabs/logging/hono`) wraps the chain for you; in Next.js you write it once per request boundary.
+
+### Why `withAttrs` is intrusive
+
+It's worth knowing what you're trading for the convenience:
+
+1. **Indents your code.** Your function body lives inside a callback. Early returns and top-level `return` become more awkward.
+2. **Async-only contract.** Works because OTel Context propagates through `await`. If you spawn a worker thread or pass a callback to a queue that runs outside the request's async tree, attrs are lost.
+3. **Small but real overhead.** AsyncLocalStorage adds ~50–200 ns per `await`. Negligible for HTTP services; measurable in hot loops doing 100k+ awaits/sec.
+4. **Hidden control flow.** A log line in `loadUser` mysteriously has `tenant=acme` attached. Great for ops, surprising for new readers.
+
+### When to skip `withAttrs` entirely
+
+```ts
+// ❌ Overkill — the attr is only used once.
+await withAttrs({ user_id }, async () => {
+  log.info("user fetched")
+})
+
+// ✅ Just pass it directly.
+log.info("user fetched", { user_id })
+
+// ❌ Overkill — used in one function, no nested awaits that need it.
+async function loadUser(id: string) {
+  return await withAttrs({ user_id: id }, async () => {
+    const row = await db.users.find(id)
+    log.info("loaded", { row_count: row ? 1 : 0 })
+    return row
+  })
+}
+
+// ✅ Child logger does the job with less ceremony.
+async function loadUser(id: string) {
+  const reqLog = log.with({ user_id: id })
+  const row = await db.users.find(id)
+  reqLog.info("loaded", { row_count: row ? 1 : 0 })
+  return row
+}
+```
+
+### When `withAttrs` earns its keep
+
+```ts
+// Middleware sets request-scoped attrs ONCE.
+app.use(async (c, next) => {
+  await withAttrs(
+    {
+      request_id: c.req.header("x-request-id") ?? crypto.randomUUID(),
+      tenant: c.req.header("x-tenant") ?? "default",
+    },
+    () => next(),
+  )
+})
+
+// 20 layers down, in a util you didn't write,
+// this log line automatically has request_id + tenant attached.
+// Same for any metric .add() call inside.
+log.info("cache miss")
+```
+
+This is the only pattern where the indentation cost is paid by _one_ file (the middleware) and _zero_ business code.
+
+### Already covered for you
+
+You get this for free, without writing `withAttrs` yourself:
+
+- **Hono**: `app.use(loggingMiddleware())` from `@tetratelabs/logging/hono` wraps every request.
+- **Next.js**: Use `withAttrs` once in `middleware.ts` or at the top of an RSC; everything below inherits it.
+
+If neither boundary feels natural for your service, you probably don't need `withAttrs` at all — just use `log.with(...)` to build a request-scoped child logger and pass it down.
+
 ### Global logger
 
 ```ts
