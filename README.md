@@ -219,6 +219,59 @@ log.info("quick message")
 setGlobalLogger(createLogger({ name: "app" }))
 ```
 
+## GCP / Cloud Logging
+
+For services running on Google Cloud (Cloud Run, GKE, Cloud Functions), use the `@tetratelabs/logging/gcp` subpath to emit logs in [Cloud Logging's structured JSON format](https://cloud.google.com/logging/docs/structured-logging).
+
+```ts
+import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
+
+setGlobalLogger(
+  createGcpLogger({
+    name: "myservice",
+    level: process.env.LOG_LEVEL ?? "info",
+    project: process.env.GOOGLE_CLOUD_PROJECT, // required for trace correlation
+    serviceName: process.env.K_SERVICE, // for Error Reporting (auto on Cloud Run)
+    serviceVersion: process.env.K_REVISION, // for Error Reporting (auto on Cloud Run)
+  }),
+)
+```
+
+### What it does
+
+- Maps levels to GCP severity (`DEBUG | INFO | WARNING | ERROR`) — the Cloud Logging UI buckets them correctly.
+- Renames `msg` → `message` and emits ISO-8601 `timestamp` per the [LogEntry spec](https://cloud.google.com/logging/docs/reference/v2/rest/v2/LogEntry).
+- When `project` is set and a trace is active, rewrites `trace_id`/`span_id` into:
+  - `logging.googleapis.com/trace` = `projects/<project>/traces/<trace_id>`
+  - `logging.googleapis.com/spanId`
+  - `logging.googleapis.com/trace_sampled`
+- On `log.error(msg, err)`, emits the [Cloud Error Reporting](https://cloud.google.com/error-reporting/docs/formatting-error-messages) payload (`@type`, `stack_trace`, `serviceContext`) so errors auto-appear in the Error Reporting console.
+- Falls back to `K_SERVICE` / `K_REVISION` env (Cloud Run sets these automatically) when `serviceName`/`serviceVersion` aren't passed.
+
+### Cloud Run example
+
+Cloud Run injects `K_SERVICE`, `K_REVISION`, and runs with OTel auto-instrumentation if you enable it. Minimal wiring:
+
+```ts
+// index.ts
+import { createGcpLogger, setGlobalLogger, log } from "@tetratelabs/logging/gcp"
+
+setGlobalLogger(
+  createGcpLogger({
+    name: "myservice",
+    project: process.env.GOOGLE_CLOUD_PROJECT,
+  }),
+)
+
+log.info("server starting", { port: process.env.PORT })
+```
+
+Logs land in Cloud Logging under your service, filterable by severity, with `trace` linked to Cloud Trace and errors flowing into Error Reporting — no separate exporter needed.
+
+### Known limitations (v0.1.x)
+
+The adapter covers the cases that _break_ if missing (severity, trace ID format, Error Reporting). Some Cloud Logging UI niceties aren't wired yet — see [#13](https://github.com/dio/logging-node/issues/13) for the v0.2.0 roadmap (`httpRequest` filtering, `operation` log grouping, `labels` indexing, source location, project auto-detection).
+
 ## Design rationale
 
 See [RATIONALE.md](./RATIONALE.md) for the full story: metric-before-level ordering, OTel Context model, Next.js Edge support, and more.
