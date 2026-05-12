@@ -93,7 +93,7 @@
     "@opentelemetry/sdk-trace-base": "^1.27",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
-    "@types/node": "^22",
+    "@types/node": "^25",
     "eslint": "^9",
     "hono": "^4",
     "prettier": "^3",
