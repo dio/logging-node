@@ -1,6 +1,13 @@
 // Edge entry point: does NOT import pino
 export type { Level, Attrs, Logger, LoggerOptions, Metric } from "./types.js"
-export { getAttrs, setAttrsOnContext, withAttrs } from "./context.js"
+export {
+  getAttrs,
+  setAttrsOnContext,
+  withAttrs,
+  getLogAttrs,
+  setLogAttrsOnContext,
+  withLogAttrs,
+} from "./context.js"
 export { getGlobalLogger, setGlobalLogger, log } from "./global.js"
 
 import { LoggerImpl } from "./logger.js"

@@ -1,7 +1,7 @@
 import { context } from "@opentelemetry/api"
 import type { Level, Logger, LoggerOptions, Attrs, Metric } from "./types.js"
 import { shouldLog } from "./levels.js"
-import { getAttrs, extractTraceFields } from "./context.js"
+import { getAttrs, getLogAttrs, extractTraceFields } from "./context.js"
 import type { Sink } from "./sink.js"
 
 interface SerializedError {
@@ -88,11 +88,13 @@ export class LoggerImpl implements Logger {
   private mergeAttrs(callAttrs?: Attrs): Attrs {
     const ctx = this.overrideContext ?? context.active()
     const contextAttrs = getAttrs(ctx)
+    const logOnlyAttrs = getLogAttrs(ctx)
     const traceFields = extractTraceFields(ctx)
 
     return {
       ...this.bindings,
       ...contextAttrs,
+      ...logOnlyAttrs,
       ...callAttrs,
       ...traceFields,
     }
