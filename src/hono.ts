@@ -91,17 +91,24 @@ export function loggingMiddleware(opts?: LoggingMiddlewareOptions): MiddlewareHa
       const honoErr = (c as unknown as { error?: unknown }).error
       const failure = thrown ?? honoErr
       if (failure) {
-        logger.error("request failed", failure as Error, {
-          status: c.res?.status ?? 500,
-          duration_ms: durationMs,
-        })
+        logger.error(
+          {
+            err: failure as Error,
+            status: c.res?.status ?? 500,
+            duration_ms: durationMs,
+          },
+          "request failed",
+        )
         if (thrown) throw thrown
         return
       }
-      logger.info("request handled", {
-        status: c.res.status,
-        duration_ms: durationMs,
-      })
+      logger.info(
+        {
+          status: c.res.status,
+          duration_ms: durationMs,
+        },
+        "request handled",
+      )
     })
   }
 }

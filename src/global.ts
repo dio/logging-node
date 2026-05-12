@@ -20,17 +20,17 @@ export function setGlobalLogger(logger: Logger): void {
 }
 
 export const log: Logger = {
-  debug(msg, attrs) {
-    return getGlobalLogger().debug(msg, attrs)
+  debug(a: any, b?: any) {
+    return getGlobalLogger().debug(a, b)
   },
-  info(msg, attrs) {
-    return getGlobalLogger().info(msg, attrs)
+  info(a: any, b?: any) {
+    return getGlobalLogger().info(a, b)
   },
-  warn(msg, attrs) {
-    return getGlobalLogger().warn(msg, attrs)
+  warn(a: any, b?: any) {
+    return getGlobalLogger().warn(a, b)
   },
-  error(msg, err, attrs) {
-    return getGlobalLogger().error(msg, err, attrs)
+  error(a: any, b?: any) {
+    return getGlobalLogger().error(a, b)
   },
   with(attrs) {
     return getGlobalLogger().with(attrs)

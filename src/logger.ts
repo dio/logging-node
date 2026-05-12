@@ -11,14 +11,51 @@ interface SerializedError {
   cause?: unknown
 }
 
-function serializeError(err: Error | null): SerializedError | null {
-  if (!err) return null
+function serializeError(err: Error): SerializedError {
   return {
     message: err.message,
     stack: err.stack,
     name: err.name,
     cause: (err as any).cause,
   }
+}
+
+/**
+ * Normalize attrs by serializing any Error instances under `err` or `error`
+ * keys (pino-compatible behavior). Both keys are accepted on input; output
+ * is always under `err` for consistency.
+ */
+function normalizeAttrs(attrs: Attrs | undefined): Attrs | undefined {
+  if (!attrs) return attrs
+  let needsCopy = false
+  for (const k of ["err", "error"]) {
+    const v = attrs[k]
+    if (v instanceof Error) {
+      needsCopy = true
+      break
+    }
+  }
+  if (!needsCopy) return attrs
+
+  const out: Record<string, unknown> = { ...attrs }
+  if (out.error instanceof Error) {
+    out.err = serializeError(out.error)
+    delete out.error
+  }
+  if (out.err instanceof Error) {
+    out.err = serializeError(out.err)
+  }
+  return out as Attrs
+}
+
+/**
+ * Parse the (attrs?, msg) | (msg) overload pair into a normalized pair.
+ */
+function parseArgs(a: Attrs | string, b?: string): { msg: string; attrs: Attrs | undefined } {
+  if (typeof a === "string") {
+    return { msg: a, attrs: undefined }
+  }
+  return { msg: b ?? "", attrs: a }
 }
 
 export class LoggerImpl implements Logger {
@@ -79,24 +116,27 @@ export class LoggerImpl implements Logger {
     this.sink.write(level, msg, merged)
   }
 
-  debug(msg: string, attrs?: Attrs): Logger {
-    this.logWithMetric("debug", msg, attrs)
+  debug(a: Attrs | string, b?: string): Logger {
+    const { msg, attrs } = parseArgs(a, b)
+    this.logWithMetric("debug", msg, normalizeAttrs(attrs))
     return this
   }
 
-  info(msg: string, attrs?: Attrs): Logger {
-    this.logWithMetric("info", msg, attrs)
+  info(a: Attrs | string, b?: string): Logger {
+    const { msg, attrs } = parseArgs(a, b)
+    this.logWithMetric("info", msg, normalizeAttrs(attrs))
     return this
   }
 
-  warn(msg: string, attrs?: Attrs): Logger {
-    this.logWithMetric("warn", msg, attrs)
+  warn(a: Attrs | string, b?: string): Logger {
+    const { msg, attrs } = parseArgs(a, b)
+    this.logWithMetric("warn", msg, normalizeAttrs(attrs))
     return this
   }
 
-  error(msg: string, err: Error | null, attrs?: Attrs): Logger {
-    const merged = { ...attrs, ...(err ? { err: serializeError(err) as any } : {}) }
-    this.logWithMetric("error", msg, merged as Attrs)
+  error(a: Attrs | string, b?: string): Logger {
+    const { msg, attrs } = parseArgs(a, b)
+    this.logWithMetric("error", msg, normalizeAttrs(attrs))
     return this
   }
 

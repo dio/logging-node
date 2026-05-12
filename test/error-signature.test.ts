@@ -11,13 +11,13 @@ class CaptureSink implements Sink {
   }
 }
 
-describe("Error Signature", () => {
-  it("logs error with message and stack", () => {
+describe("Error Signature (pino-style attrs-first)", () => {
+  it("serializes Error instance under `err` key", () => {
     const sink = new CaptureSink()
     const logger = new LoggerImpl(sink, { level: "debug" })
 
     const err = new Error("something failed")
-    logger.error("operation failed", err, { op: "reserve" })
+    logger.error({ err, op: "reserve" }, "operation failed")
 
     expect(sink.entries).toHaveLength(1)
     const entry = sink.entries[0]
@@ -31,11 +31,28 @@ describe("Error Signature", () => {
     expect(errField.name).toBe("Error")
   })
 
-  it("logs error with null and attrs", () => {
+  it("also accepts `error` key (pino convention); output normalized to `err`", () => {
     const sink = new CaptureSink()
     const logger = new LoggerImpl(sink, { level: "debug" })
 
-    logger.error("no error here", null, { status: "ok" })
+    const err = new Error("compat path")
+    logger.error({ error: err, op: "compat" }, "from pino-style call site")
+
+    expect(sink.entries).toHaveLength(1)
+    const entry = sink.entries[0]
+    expect(entry.fields.op).toBe("compat")
+    const errField = entry.fields.err as any
+    expect(errField).toBeDefined()
+    expect(errField.message).toBe("compat path")
+    // `error` key should be removed after normalization
+    expect(entry.fields.error).toBeUndefined()
+  })
+
+  it("plain attrs (no Error) pass through unchanged", () => {
+    const sink = new CaptureSink()
+    const logger = new LoggerImpl(sink, { level: "debug" })
+
+    logger.error({ status: "ok" }, "no error here")
 
     expect(sink.entries).toHaveLength(1)
     const entry = sink.entries[0]
@@ -50,7 +67,7 @@ describe("Error Signature", () => {
 
     const cause = new Error("root cause")
     const err = new Error("wrapped", { cause })
-    logger.error("failed", err)
+    logger.error({ err }, "failed")
 
     expect(sink.entries).toHaveLength(1)
     const errField = sink.entries[0].fields.err as any
@@ -72,11 +89,23 @@ describe("Error Signature", () => {
     }
 
     const err = new CustomError("validation failed", "INVALID_INPUT")
-    logger.error("request invalid", err)
+    logger.error({ err }, "request invalid")
 
     expect(sink.entries).toHaveLength(1)
     const errField = sink.entries[0].fields.err as any
     expect(errField.name).toBe("CustomError")
     expect(errField.message).toBe("validation failed")
+  })
+
+  it("bare message (no attrs) works for all levels", () => {
+    const sink = new CaptureSink()
+    const logger = new LoggerImpl(sink, { level: "debug" })
+
+    logger.debug("d")
+    logger.info("i")
+    logger.warn("w")
+    logger.error("e")
+
+    expect(sink.entries.map((e) => e.msg)).toEqual(["d", "i", "w", "e"])
   })
 })

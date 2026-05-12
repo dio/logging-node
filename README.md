@@ -27,8 +27,8 @@ import { metrics } from "@opentelemetry/api"
 // Create a logger (or use the global singleton)
 const logger = createLogger({ name: "myapp", level: "info" })
 
-// Structured logging
-logger.info("user signin", { user_id: "123", provider: "google" })
+// Structured logging (pino-style: attrs first, message second)
+logger.info({ user_id: "123", provider: "google" }, "user signin")
 
 // With metrics (fires before level check)
 const requests = metrics.getMeter("myapp").createCounter("requests_total")
@@ -131,7 +131,7 @@ The library gives you three ways to attach attributes. Pick deliberately — `wi
 
 | You want…                                                                        | Use                            | Example                                                     |
 | -------------------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------- |
-| Attach attrs to **one log line**                                                 | per-call `attrs` arg           | `log.info("ok", { user_id })`                               |
+| Attach attrs to **one log line**                                                 | per-call `attrs` arg           | `log.info({ user_id }, "ok")`                               |
 | Attach attrs to **many calls in the same function**                              | `log.with(...)` (child logger) | `const reqLog = log.with({ request_id }); reqLog.info(...)` |
 | Attach attrs to **everything downstream**, including async fns you don't control | `withAttrs(...)`               | middleware sets `request_id`, every nested log inherits it  |
 
@@ -159,13 +159,13 @@ await withAttrs({ user_id }, async () => {
 })
 
 // ✅ Just pass it directly.
-log.info("user fetched", { user_id })
+log.info({ user_id }, "user fetched")
 
 // ❌ Overkill — used in one function, no nested awaits that need it.
 async function loadUser(id: string) {
   return await withAttrs({ user_id: id }, async () => {
     const row = await db.users.find(id)
-    log.info("loaded", { row_count: row ? 1 : 0 })
+    log.info({ row_count: row ? 1 : 0 }, "loaded")
     return row
   })
 }
@@ -174,7 +174,7 @@ async function loadUser(id: string) {
 async function loadUser(id: string) {
   const reqLog = log.with({ user_id: id })
   const row = await db.users.find(id)
-  reqLog.info("loaded", { row_count: row ? 1 : 0 })
+  reqLog.info({ row_count: row ? 1 : 0 }, "loaded")
   return row
 }
 ```
@@ -281,7 +281,7 @@ setGlobalLogger(
   }),
 )
 
-log.info("server starting", { port: process.env.PORT })
+log.info({ port: process.env.PORT }, "server starting")
 ```
 
 Logs land in Cloud Logging under your service, filterable by severity, with `trace` linked to Cloud Trace and errors flowing into Error Reporting — no separate exporter needed.

@@ -34,7 +34,7 @@ describe("GCP format e2e", () => {
 
     log.info("hello info")
     log.warn("hello warn")
-    log.error("hello error", new Error("boom"))
+    log.error({ err: new Error("boom") }, "hello error")
 
     expect(emitted.length).toBeGreaterThanOrEqual(3)
 
@@ -84,7 +84,7 @@ describe("GCP format e2e", () => {
 
   it("preserves arbitrary structured fields", () => {
     const log = createGcpLogger({ name: "test", level: "info" })
-    log.info("with fields", { tenant: "acme", count: 42 })
+    log.info({ tenant: "acme", count: 42 }, "with fields")
 
     const entry = emitted.find((l) => l.message === "with fields")
     expect(entry).toBeDefined()

@@ -328,8 +328,8 @@ const log = createLogger({ name: "valet", level: "info", pino: pinoOpts? })
 log.setLevel("error")          // info logs silenced; metrics still fire
 
 // Structured kvs
-log.info("msg", { key: "v" })       // object form (idiomatic)
-log.info("msg", "key", "v")         // varargs form (Go-style, also supported)
+log.info("msg") // bare message
+log.info({ key: "v" }, "msg") // attrs first (pino-style), message second
 
 // Child logger with persistent kvs
 const reqLog = log.with({ request_id })
@@ -338,10 +338,10 @@ const reqLog = log.with({ request_id })
 log.context(otelCtx).info("msg")
 
 // Attach a metric (fires before level check)
-log.metric(counter).info("msg", { cluster })
+log.metric(counter).info({ cluster }, "msg")
 
-// Error: error param is positional (matches Go)
-log.error("reserve failed", err, { cluster })
+// Error: pino-style — attach Error via `err` key in attrs (auto-serialized)
+log.error({ err, cluster }, "reserve failed")
 ```
 
 Levels: `debug | info | warn | error | none`. We add `warn` (pino has it,
@@ -410,7 +410,8 @@ TracerProvider, same as Go.
 4. **Levels**: pino strings — `"debug" | "info" | "warn" | "error" | "none"`.
    (`"trace"` and `"fatal"` are pino-supported but not exposed by our facade;
    we keep parity with Go's level set + `warn`.)
-5. **Error signature**: positional — `log.error(msg, err, attrs?)`. `err`
-   is required (may be `null` if truly absent).
+5. **Error signature**: pino-style — `log.error(attrs, msg)`. Pass the
+   error via `err` (or `error`) key in attrs; the lib auto-serializes
+   `Error` instances. Optional, omit for bare-message error logs.
 6. **`@vercel/otel`**: documented in README, **not** a peer dep. Users may
    wire raw `NodeSDK` instead.

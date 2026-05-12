@@ -44,7 +44,7 @@ describe("Metric Bypass Guarantee", () => {
     const counter = new FakeMetric()
 
     const child = logger.with({ env: "prod" })
-    child.metric(counter).info("msg", { op: "create" })
+    child.metric(counter).info({ op: "create" }, "msg")
 
     expect(counter.calls).toHaveLength(1)
     // Metric should have binding attrs but NOT trace fields (those are log-only)
@@ -65,7 +65,7 @@ describe("Metric Bypass Guarantee", () => {
       calls: [] as any[],
     }
 
-    logger.metric(histogram).info("latency", { ms: 42 })
+    logger.metric(histogram).info({ ms: 42 }, "latency")
 
     expect(histogram.calls).toHaveLength(1)
     expect(histogram.calls[0].value).toBe(1)
