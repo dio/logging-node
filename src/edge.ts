@@ -7,7 +7,10 @@ export {
   getLogAttrs,
   setLogAttrsOnContext,
   withLogAttrs,
+  getOperation,
+  setOperationOnContext,
 } from "./context.js"
+export type { OperationInfo } from "./context.js"
 export { getGlobalLogger, setGlobalLogger, log } from "./global.js"
 
 import { LoggerImpl } from "./logger.js"

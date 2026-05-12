@@ -1,7 +1,7 @@
 import { context } from "@opentelemetry/api"
 import type { Level, Logger, LoggerOptions, Attrs, Metric } from "./types.js"
 import { shouldLog } from "./levels.js"
-import { getAttrs, getLogAttrs, extractTraceFields } from "./context.js"
+import { getAttrs, getLogAttrs, getOperation, extractTraceFields } from "./context.js"
 import type { Sink } from "./sink.js"
 
 interface SerializedError {
@@ -90,14 +90,28 @@ export class LoggerImpl implements Logger {
     const contextAttrs = getAttrs(ctx)
     const logOnlyAttrs = getLogAttrs(ctx)
     const traceFields = extractTraceFields(ctx)
+    const operation = getOperation(ctx)
 
-    return {
+    const merged: Attrs = {
       ...this.bindings,
       ...contextAttrs,
       ...logOnlyAttrs,
       ...callAttrs,
       ...traceFields,
     }
+
+    // Operation grouping. The middleware emits explicit bookend logs
+    // (request received, request handled/failed) with first/last flags
+    // attached as call attrs. Intermediate logs inherit { id, producer }
+    // from the context. We never auto-attach first/last from the
+    // context-derived operation — those flags are set per-call.
+    if (operation && !merged.operation) {
+      const out: { id: string; producer?: string } = { id: operation.id }
+      if (operation.producer) out.producer = operation.producer
+      merged.operation = out
+    }
+
+    return merged
   }
 
   private logWithMetric(level: Level, msg: string, callAttrs?: Attrs): void {

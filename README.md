@@ -449,9 +449,70 @@ setGlobalLogger(createGcpLogger())
 
 GCP metadata server auto-detection (Cloud Run, GKE, GCE) is deliberately out of scope for v0.2.x. The sink is synchronous; the metadata server needs an async HTTP call on init. One line of YAML to set `GOOGLE_CLOUD_PROJECT` beats a 200ms cold-start round-trip.
 
-### Known limitations (v0.1.x)
+### Structured fields (v0.3.0)
 
-The adapter covers the cases that _break_ if missing (severity, trace ID format, Error Reporting). Some Cloud Logging UI niceties aren't wired yet — see [#13](https://github.com/dio/logging-node/issues/13) for the v0.2.0 roadmap (`httpRequest` filtering, `operation` log grouping, `labels` indexing, source location, project auto-detection).
+Beyond severity and trace correlation, the GCP sink emits four optional structured fields that unlock specific Cloud Logging UI features.
+
+`httpRequest` adds Method, URL, Status, Latency columns to the Cloud Logging UI and enables filtering chips. The Hono middleware emits this on every request summary log line. No config needed.
+
+```jsonc
+{
+  "severity": "INFO",
+  "message": "request handled",
+  "httpRequest": {
+    "requestMethod": "GET",
+    "requestUrl": "/api/echo",
+    "status": 200,
+    "latency": "0.045s",
+    "userAgent": "curl/8",
+    "remoteIp": "203.0.113.1"
+  }
+}
+```
+
+To disable: `loggingMiddleware({ httpRequest: false })`.
+
+`logging.googleapis.com/operation` groups all log lines from a single request under one expandable entry in the Cloud Logging UI. The Hono middleware:
+
+- Emits a "request received" log with `first: true` at request start
+- Stamps `{ id, producer }` on every log inside the request scope
+- Emits a "request handled" log with `last: true` at request end
+
+```ts
+app.use(loggingMiddleware({ operation: { producer: "auth" } }))
+// producer defaults to OTEL_SERVICE_NAME when not set explicitly
+// To disable: operation: false
+```
+
+`logging.googleapis.com/labels` moves bounded keys from `jsonPayload` to indexed labels for fast Cloud Logging filtering. Cap is 64 per entry. Use for low-cardinality values like customer, environment, region.
+
+```ts
+createGcpLogger({
+  name: "auth",
+  labelKeys: ["customer", "environment", "service_plane"],
+})
+// Any log with attrs { customer: "acme", ... } emits:
+//   "logging.googleapis.com/labels": { "customer": "acme", ... }
+// instead of flat jsonPayload fields.
+```
+
+NEVER put unbounded keys here (request_id, user_id). Cloud Logging will still index them and bill you, and overflow past 64 keys triggers a one-time warn.
+
+`logging.googleapis.com/sourceLocation` emits `{ file, line, function }` for the call site, used by Cloud Error Reporting for grouping.
+
+```ts
+createGcpLogger({ sourceLocation: "error" })  // default: only on error level
+createGcpLogger({ sourceLocation: "always" }) // every log (parses stack each call)
+createGcpLogger({ sourceLocation: "off" })    // never
+```
+
+Parsing `new Error().stack` is not free. The `"error"` default keeps it cheap by only doing it on the level where Error Reporting cares.
+
+`logging.googleapis.com/trace_sampled` is derived from the active OTel `SpanContext.traceFlags`. No config needed. Previously hard-coded to `true`; v0.3.0 reflects reality so tail-sampled traces are correctly marked.
+
+### Known limitations
+
+GCP metadata server project auto-detection is not yet implemented. Coming in the next PR. v0.3.x requires `GOOGLE_CLOUD_PROJECT` env (or explicit `project` option). Cloud Run sets this automatically; on GKE wire it through the Downward API.
 
 ## Design rationale
 

@@ -1,6 +1,6 @@
 import type { MiddlewareHandler, Context as HonoContext } from "hono"
 import { context } from "@opentelemetry/api"
-import { setAttrsOnContext, setLogAttrsOnContext, log } from "./index.js"
+import { setAttrsOnContext, setLogAttrsOnContext, setOperationOnContext, log } from "./index.js"
 import type { Attrs } from "./types.js"
 
 // Well-known unbounded fields. When the legacy `attrs` option is used,
@@ -74,6 +74,26 @@ export interface LoggingMiddlewareOptions {
    * Set to `[]` to skip header resolution and always generate a UUID.
    */
   requestIdHeaders?: string[]
+
+  /**
+   * Cloud Logging "operation" producer field. Used to group log entries
+   * across a single request in the Cloud Logging UI. Defaults to
+   * `OTEL_SERVICE_NAME` if set, otherwise omitted.
+   *
+   * Operations themselves are always emitted (the middleware marks the
+   * first and last log lines so the UI knows when grouping starts and
+   * ends). Set `operation: false` to disable entirely.
+   */
+  operation?: false | { producer?: string }
+
+  /**
+   * Emit the `httpRequest` structured field on the request summary log.
+   * Enabled by default. Set to `false` to suppress.
+   *
+   * The Cloud Logging UI shows method/status/latency columns and adds
+   * filtering chips when `httpRequest` is present.
+   */
+  httpRequest?: boolean
 }
 
 const DEFAULT_REQUEST_ID_HEADERS = ["x-cloud-trace-context", "x-request-id"]
@@ -159,10 +179,30 @@ export function loggingMiddleware(opts?: LoggingMiddlewareOptions): MiddlewareHa
     }
     ctx = setLogAttrsOnContext(ctx, finalLogAttrs as Attrs)
 
+    // Operation grouping. The middleware writes operation into the
+    // OTel context without first/last flags. Bookend logs (the explicit
+    // "request received" and "request handled/failed" lines) override
+    // by passing `operation` as a call attr with first/last set.
+    const opEnabled = opts?.operation !== false
+    const producer = (opts?.operation && opts.operation.producer) || process.env.OTEL_SERVICE_NAME
+    const opBase = opEnabled ? { id: requestId, ...(producer ? { producer } : {}) } : undefined
+    if (opBase) {
+      ctx = setOperationOnContext(ctx, opBase)
+    }
+    const opFirst: Attrs = opBase ? { operation: { ...opBase, first: true } } : {}
+    const opLast: Attrs = opBase ? { operation: { ...opBase, last: true } } : {}
+
     const start = Date.now()
     const logger = opts?.logger ?? log
+    const emitHttpRequest = opts?.httpRequest !== false
 
     return await context.with(ctx, async () => {
+      // Bookend: explicit "first" log line so the Cloud Logging UI
+      // knows where the operation starts.
+      if (opBase) {
+        logger.info(opFirst, "request received")
+      }
+
       let thrown: unknown = undefined
       try {
         await next()
@@ -172,12 +212,17 @@ export function loggingMiddleware(opts?: LoggingMiddlewareOptions): MiddlewareHa
       const durationMs = Date.now() - start
       const honoErr = (c as unknown as { error?: unknown }).error
       const failure = thrown ?? honoErr
+
+      const httpRequest = emitHttpRequest ? buildHttpRequest(c, durationMs) : undefined
+
       if (failure) {
         logger.error(
           {
             err: failure as Error,
             status: c.res?.status ?? 500,
             duration_ms: durationMs,
+            ...(httpRequest ? { http_request: httpRequest } : {}),
+            ...opLast,
           },
           "request failed",
         )
@@ -188,9 +233,29 @@ export function loggingMiddleware(opts?: LoggingMiddlewareOptions): MiddlewareHa
         {
           status: c.res.status,
           duration_ms: durationMs,
+          ...(httpRequest ? { http_request: httpRequest } : {}),
+          ...opLast,
         },
         "request handled",
       )
     })
   }
+}
+
+function buildHttpRequest(c: HonoContext, durationMs: number): Record<string, unknown> {
+  const url = new URL(c.req.url)
+  const status = c.res?.status ?? 0
+  const out: Record<string, unknown> = {
+    requestMethod: c.req.method,
+    requestUrl: url.pathname + url.search,
+    status,
+    latency: `${(durationMs / 1000).toFixed(3)}s`,
+  }
+  const ua = c.req.header("user-agent")
+  if (ua) out.userAgent = ua
+  const ip = c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip")
+  if (ip) out.remoteIp = String(ip).split(",")[0]!.trim()
+  const referer = c.req.header("referer")
+  if (referer) out.referer = referer
+  return out
 }

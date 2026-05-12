@@ -68,6 +68,7 @@ describe("GCP Sink", () => {
       sink.write("info", "request", {
         trace_id: "abc123",
         span_id: "def456",
+        trace_sampled: true,
         other_field: "value",
       })
 
@@ -283,13 +284,15 @@ describe("GCP Sink", () => {
       })
     })
 
-    it("skips trace correlation when no project is resolvable", () => {
+    it("skips trace correlation when no project is resolvable, strips trace_id", () => {
       const sink = createGcpSink()
       sink.write("info", "test", { trace_id: "abc" })
       const entry = JSON.parse(captured[0])
       expect(entry["logging.googleapis.com/trace"]).toBeUndefined()
-      // The raw trace_id stays in the entry as a regular field
-      expect(entry.trace_id).toBe("abc")
+      // Without a project we cannot emit logging.googleapis.com/trace.
+      // The raw trace_id is also dropped to avoid leaking an unstructured
+      // copy into jsonPayload — it would just clutter the Cloud Logging UI.
+      expect(entry.trace_id).toBeUndefined()
     })
 
     it("final fallback to 'unknown' when nothing is available", () => {
