@@ -129,4 +129,117 @@ describe("hono middleware", () => {
     const handled = globalSink.entries.find((e) => e.msg === "request handled")
     expect(handled).toBeDefined()
   })
+
+  describe("request_id resolution", () => {
+    it("extracts trace_id from x-cloud-trace-context (GCP format)", async () => {
+      const app = new Hono()
+      app.use(loggingMiddleware({ logger: testLogger }))
+      app.get("/gcp", (c) => c.text("ok"))
+
+      // GCP Cloud Trace header format: TRACE_ID/SPAN_ID;o=FLAGS
+      await app.request("/gcp", {
+        headers: { "x-cloud-trace-context": "abc123def456/9876543210;o=1" },
+      })
+
+      const handled = sink.entries.find((e) => e.msg === "request handled")
+      expect(handled!.fields.request_id).toBe("abc123def456")
+    })
+
+    it("prefers x-cloud-trace-context over x-request-id (default order)", async () => {
+      const app = new Hono()
+      app.use(loggingMiddleware({ logger: testLogger }))
+      app.get("/p", (c) => c.text("ok"))
+
+      await app.request("/p", {
+        headers: {
+          "x-cloud-trace-context": "trace-from-gcp/span;o=1",
+          "x-request-id": "rid-from-envoy",
+        },
+      })
+
+      const handled = sink.entries.find((e) => e.msg === "request handled")
+      expect(handled!.fields.request_id).toBe("trace-from-gcp")
+    })
+
+    it("falls back to x-request-id when x-cloud-trace-context missing", async () => {
+      const app = new Hono()
+      app.use(loggingMiddleware({ logger: testLogger }))
+      app.get("/f", (c) => c.text("ok"))
+
+      await app.request("/f", { headers: { "x-request-id": "envoy-rid" } })
+
+      const handled = sink.entries.find((e) => e.msg === "request handled")
+      expect(handled!.fields.request_id).toBe("envoy-rid")
+    })
+
+    it("falls back to UUID when no headers match", async () => {
+      const app = new Hono()
+      app.use(loggingMiddleware({ logger: testLogger }))
+      app.get("/u", (c) => c.text("ok"))
+
+      await app.request("/u")
+
+      const handled = sink.entries.find((e) => e.msg === "request handled")
+      expect(handled!.fields.request_id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      )
+    })
+
+    it("respects custom requestIdHeaders order", async () => {
+      const app = new Hono()
+      app.use(
+        loggingMiddleware({
+          logger: testLogger,
+          requestIdHeaders: ["x-correlation-id", "x-request-id"],
+        }),
+      )
+      app.get("/c", (c) => c.text("ok"))
+
+      await app.request("/c", {
+        headers: {
+          "x-cloud-trace-context": "ignored/span;o=1",
+          "x-correlation-id": "correlation-wins",
+          "x-request-id": "fallback",
+        },
+      })
+
+      const handled = sink.entries.find((e) => e.msg === "request handled")
+      expect(handled!.fields.request_id).toBe("correlation-wins")
+    })
+
+    it("skips empty header values (e.g. malformed cloud-trace)", async () => {
+      const app = new Hono()
+      app.use(loggingMiddleware({ logger: testLogger }))
+      app.get("/e", (c) => c.text("ok"))
+
+      // Empty trace ID before the slash → should fall through
+      await app.request("/e", {
+        headers: {
+          "x-cloud-trace-context": "/span;o=1",
+          "x-request-id": "envoy-fallback",
+        },
+      })
+
+      const handled = sink.entries.find((e) => e.msg === "request handled")
+      expect(handled!.fields.request_id).toBe("envoy-fallback")
+    })
+
+    it("generateRequestId always wins over headers", async () => {
+      const app = new Hono()
+      app.use(
+        loggingMiddleware({
+          logger: testLogger,
+          generateRequestId: () => "always-this",
+        }),
+      )
+      app.get("/g", (c) => c.text("ok"))
+
+      await app.request("/g", {
+        headers: { "x-cloud-trace-context": "ignored/span;o=1" },
+      })
+
+      const handled = sink.entries.find((e) => e.msg === "request handled")
+      expect(handled!.fields.request_id).toBe("always-this")
+    })
+  })
 })

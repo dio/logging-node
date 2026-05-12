@@ -223,6 +223,24 @@ setGlobalLogger(createLogger({ name: "app" }))
 
 For services running on Google Cloud (Cloud Run, GKE, Cloud Functions), use the `@tetratelabs/logging/gcp` subpath to emit logs in [Cloud Logging's structured JSON format](https://cloud.google.com/logging/docs/structured-logging).
 
+### Hono on GCP — request_id correlation
+
+The Hono middleware extracts `request_id` from `x-cloud-trace-context` by default (GCP's Load Balancer / Cloud Run propagator), falling back to `x-request-id`. The trace ID portion (the part before `/SPAN_ID;o=FLAGS`) becomes `request_id`, so log entries correlate 1:1 with Cloud Trace spans in the Cloud Logging UI:
+
+```ts
+import { loggingMiddleware } from "@tetratelabs/logging/hono"
+
+// Defaults work for GCP — tries x-cloud-trace-context then x-request-id:
+app.use(loggingMiddleware())
+
+// Or customize the header priority:
+app.use(
+  loggingMiddleware({
+    requestIdHeaders: ["x-correlation-id", "x-cloud-trace-context"],
+  }),
+)
+```
+
 ```ts
 import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
 
