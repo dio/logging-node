@@ -465,8 +465,8 @@ Beyond severity and trace correlation, the GCP sink emits four optional structur
     "status": 200,
     "latency": "0.045s",
     "userAgent": "curl/8",
-    "remoteIp": "203.0.113.1"
-  }
+    "remoteIp": "203.0.113.1",
+  },
 }
 ```
 
@@ -501,9 +501,9 @@ NEVER put unbounded keys here (request_id, user_id). Cloud Logging will still in
 `logging.googleapis.com/sourceLocation` emits `{ file, line, function }` for the call site, used by Cloud Error Reporting for grouping.
 
 ```ts
-createGcpLogger({ sourceLocation: "error" })  // default: only on error level
+createGcpLogger({ sourceLocation: "error" }) // default: only on error level
 createGcpLogger({ sourceLocation: "always" }) // every log (parses stack each call)
-createGcpLogger({ sourceLocation: "off" })    // never
+createGcpLogger({ sourceLocation: "off" }) // never
 ```
 
 Parsing `new Error().stack` is not free. The `"error"` default keeps it cheap by only doing it on the level where Error Reporting cares.
