@@ -1,6 +1,6 @@
 {
   "name": "@tetratelabs/logging",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Structured logging with guaranteed metrics, built on pino and OpenTelemetry.",
   "type": "module",
   "packageManager": "pnpm@9.1.0",
