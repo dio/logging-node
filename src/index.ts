@@ -1,6 +1,13 @@
 // Node entry point: includes pino sink
 export type { Level, Attrs, Logger, LoggerOptions, Metric } from "./types.js"
-export { getAttrs, setAttrsOnContext, withAttrs } from "./context.js"
+export {
+  getAttrs,
+  setAttrsOnContext,
+  withAttrs,
+  getLogAttrs,
+  setLogAttrsOnContext,
+  withLogAttrs,
+} from "./context.js"
 export { getGlobalLogger, setGlobalLogger, log } from "./global.js"
 
 import { context } from "@opentelemetry/api"

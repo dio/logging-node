@@ -117,13 +117,61 @@ logger.level()            // get current level
 
 ### `withAttrs(attrs, fn)`
 
-Scopes attributes to an async function. Attributes merge into all logs and metrics within.
+Scopes **metric-safe** (bounded) attributes to an async function. These appear on log records AND on counter labels for every `log.metric(c).info(...)` inside.
 
 ```ts
 await withAttrs({ customer_id: "acme" }, async () => {
-  logger.info("order placed") // includes customer_id
+  logger.info("order placed") // log line has customer_id
+  log.metric(orders).info("order placed") // counter labelled customer_id="acme"
 })
 ```
+
+Use for **bounded** values only: customer ID (capped at <100), region, environment, plan tier, role enum. Anything where the value space is small and known.
+
+### `withLogAttrs(attrs, fn)` ← added in v0.3.0
+
+Scopes **log-only** (unbounded) attributes to an async function. These appear on log records but are **never** attached to counter labels.
+
+```ts
+await withLogAttrs({ request_id: "abc", user_id: "u-123" }, async () => {
+  logger.info("processing") // log line has request_id and user_id
+  log.metric(orders).info("processing") // counter NOT labelled by request_id
+})
+```
+
+Use for **unbounded** values: `request_id`, `user_id`, `email`, `ip`, `user_agent`, raw paths, raw query strings. Anything where the value space is huge or unknown.
+
+### Why two scopes?
+
+OpenTelemetry counters create a new time series for every unique combination of label values. If `request_id` ends up as a counter label, every request creates a new series. A service doing 1k RPS for an hour gets 3.6 million series. Counters become useless and your metrics backend bills you for the storage.
+
+The fix is keeping unbounded values strictly off counters. Two scopes encode this in the API so it cannot be done by accident.
+
+| Function              | Goes on logs? | Goes on metrics? | When to use                                   |
+| --------------------- | ------------- | ---------------- | --------------------------------------------- |
+| `withAttrs`           | yes           | yes              | bounded enums: customer, region, env, role    |
+| `withLogAttrs`        | yes           | no               | unbounded: request_id, user_id, ip, raw paths |
+| call-site `attrs` arg | yes           | yes              | per-call labels (must also be bounded)        |
+
+### Anti-pattern (this used to ship)
+
+```ts
+// WRONG — request_id leaks to every counter label as a cardinality bomb.
+await withAttrs({ request_id, customer_id }, async () => {
+  log.metric(orders).info("order placed")
+})
+```
+
+```ts
+// RIGHT — bounded labels and unbounded fields kept separate.
+await withAttrs({ customer_id }, async () => {
+  await withLogAttrs({ request_id }, async () => {
+    log.metric(orders).info("order placed")
+  })
+})
+```
+
+The Hono middleware (`@tetratelabs/logging/hono`) handles this split automatically. See the Hono section below.
 
 ## When to use what
 
@@ -230,10 +278,27 @@ The Hono middleware extracts `request_id` from `x-cloud-trace-context` by defaul
 ```ts
 import { loggingMiddleware } from "@tetratelabs/logging/hono"
 
-// Defaults work for GCP — tries x-cloud-trace-context then x-request-id:
+// Defaults work for GCP — tries x-cloud-trace-context then x-request-id.
+// request_id, method, path are auto-attached to logs (never to metric labels).
 app.use(loggingMiddleware())
 
-// Or customize the header priority:
+// Add request-scoped attrs. Use metricAttrs for bounded labels and
+// logAttrs for unbounded fields. The middleware enforces the split.
+app.use(
+  loggingMiddleware({
+    metricAttrs: (c) => ({
+      // bounded: lands on log AND counter labels
+      customer: c.req.header("x-customer-id") ?? "unknown",
+      environment: "prod",
+    }),
+    logAttrs: (c) => ({
+      // unbounded: lands on log ONLY, never on counters
+      user_agent: c.req.header("user-agent") ?? "",
+    }),
+  }),
+)
+
+// Customize the request_id header priority:
 app.use(
   loggingMiddleware({
     requestIdHeaders: ["x-correlation-id", "x-cloud-trace-context"],
