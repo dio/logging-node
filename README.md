@@ -313,22 +313,76 @@ You can omit `project`, `serviceName`, and `serviceVersion` if the runtime sets 
 4. `npm_package_version`
 5. `"unknown"`
 
-This means **on Cloud Run you can call `createGcpLogger()` with no arguments** and get correct values. On GKE you set OTel env vars via the Downward API once in your Deployment manifest:
+### GKE deployment (the common case)
+
+On GKE, set the OpenTelemetry env vars in your Deployment via the Downward API. The logger picks them up automatically and they also feed the OTel SDK, so service name stays consistent across logs, traces, and metrics.
 
 ```yaml
-# Deployment spec
-env:
-  - name: OTEL_SERVICE_NAME
-    value: "fraser-auth"
-  - name: OTEL_SERVICE_VERSION
-    valueFrom:
-      fieldRef:
-        fieldPath: "metadata.labels['app.kubernetes.io/version']"
-  - name: GOOGLE_CLOUD_PROJECT
-    value: "my-gcp-project"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraser-auth
+  labels:
+    app.kubernetes.io/name: fraser-auth
+    app.kubernetes.io/version: "1.2.3"
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fraser-auth
+        app.kubernetes.io/version: "1.2.3"
+    spec:
+      containers:
+        - name: app
+          image: gcr.io/my-project/fraser-auth:1.2.3
+          env:
+            # The two OTel vars are what the logger reads.
+            - name: OTEL_SERVICE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['app.kubernetes.io/name']"
+            - name: OTEL_SERVICE_VERSION
+              valueFrom:
+                fieldRef:
+                  fieldPath: "metadata.labels['app.kubernetes.io/version']"
+            # GCP project — needed for trace correlation in Cloud Logging.
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "my-gcp-project"
+            # Optional: pod / namespace for ad-hoc filtering in the Cloud Logging UI.
+            # These don't affect Error Reporting; they're just extra fields on each log.
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
 ```
 
-GCP metadata server auto-detection (Cloud Run, GKE, GCE) is deliberately out of scope for v0.2.x because the sink is synchronous and the metadata server needs an async HTTP call on init. If your service can't set these vars, pass them explicitly.
+Code side:
+
+```ts
+import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
+
+setGlobalLogger(createGcpLogger()) // zero config
+```
+
+Cloud Logging's GKE log scraper auto-tags entries with `resource.type: k8s_container` and adds pod/namespace/cluster labels at ingestion. You don't need to emit those yourself — the scraper handles it. The Downward API env vars above are for the bits the scraper can't infer (your application's service name and version).
+
+### Cloud Run deployment
+
+Cloud Run injects `K_SERVICE` and `K_REVISION` automatically, so this works with no config beyond the project:
+
+```ts
+setGlobalLogger(createGcpLogger({ project: process.env.GOOGLE_CLOUD_PROJECT }))
+```
+
+Or if you set `GOOGLE_CLOUD_PROJECT` in the service env:
+
+```ts
+setGlobalLogger(createGcpLogger())
+```
+
+### What's not auto-detected
+
+GCP metadata server auto-detection (Cloud Run, GKE, GCE) is deliberately out of scope for v0.2.x. The sink is synchronous; the metadata server needs an async HTTP call on init. One line of YAML to set `GOOGLE_CLOUD_PROJECT` beats a 200ms cold-start round-trip.
 
 ### Known limitations (v0.1.x)
 
