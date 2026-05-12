@@ -21,10 +21,10 @@ describe("Logger", () => {
     const sink = new CaptureSink()
     const logger = new LoggerImpl(sink, { level: "debug" })
 
-    logger.debug("debug msg", { key: "val" })
+    logger.debug({ key: "val" }, "debug msg")
     logger.info("info msg")
     logger.warn("warn msg")
-    logger.error("error msg", null)
+    logger.error("error msg")
 
     expect(sink.entries).toHaveLength(4)
     expect(sink.entries[0].level).toBe("debug")
@@ -53,7 +53,7 @@ describe("Logger", () => {
     const logger = new LoggerImpl(sink, { level: "debug" })
     const child = logger.with({ request_id: "123" })
 
-    child.info("msg", { extra: "field" })
+    child.info({ extra: "field" }, "msg")
 
     expect(sink.entries).toHaveLength(1)
     expect(sink.entries[0].fields.request_id).toBe("123")
@@ -80,7 +80,7 @@ describe("Logger", () => {
     const logger = new LoggerImpl(sink, { level: "debug" })
 
     const err = new Error("boom")
-    logger.error("failed", err)
+    logger.error({ err }, "failed")
 
     expect(sink.entries).toHaveLength(1)
     const errField = sink.entries[0].fields.err as any
@@ -93,7 +93,7 @@ describe("Logger", () => {
     const sink = new CaptureSink()
     const logger = new LoggerImpl(sink, { level: "debug" })
 
-    logger.error("something went wrong", null, { code: "ERR_001" })
+    logger.error({ code: "ERR_001" }, "something went wrong")
 
     expect(sink.entries).toHaveLength(1)
     expect(sink.entries[0].fields.code).toBe("ERR_001")
@@ -104,7 +104,7 @@ describe("Logger", () => {
     const sink = new CaptureSink()
     const logger = new LoggerImpl(sink, { level: "debug" })
 
-    logger.debug("d").info("i").warn("w").error("e", null)
+    logger.debug("d").info("i").warn("w").error("e")
 
     expect(sink.entries).toHaveLength(4)
   })
