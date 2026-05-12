@@ -44,6 +44,22 @@ export interface GcpSinkOptions extends SinkOptions {
    *   "off"              — never emit.
    */
   sourceLocation?: "error" | "always" | "off"
+
+  /**
+   * GCP project ID auto-detection from the metadata server.
+   *
+   * Enabled by default. When `project` is not explicitly set and no
+   * GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT env vars are present, the
+   * sink queries http://metadata.google.internal at logger init with a
+   * 200ms timeout. The result is cached for the process lifetime
+   * (success AND failure), so non-GCP environments only pay the
+   * timeout once.
+   *
+   * Logs emitted before detection completes fall back to env vars or
+   * skip the trace correlation prefix. Set to `false` to disable
+   * entirely (no metadata fetch ever).
+   */
+  projectAutoDetect?: boolean
 }
 
 interface GcpLogEntry {
@@ -108,8 +124,78 @@ function pinoLevelToGcpSeverity(level: Level): string {
   }
 }
 
+/**
+ * GCP metadata server endpoint for the active project ID. Reachable
+ * from Cloud Run, GKE, GCE, App Engine flex. Returns plain text.
+ *
+ * The async detection runs once per process. Success and failure are
+ * both cached for the process lifetime so dev laptops don't pay the
+ * timeout cost on every log call.
+ */
+const METADATA_URL = "http://metadata.google.internal/computeMetadata/v1/project/project-id"
+const METADATA_TIMEOUT_MS = 200
+
+let metadataProjectCache: { value: string | undefined } | undefined
+let metadataDetectionInFlight: Promise<string | undefined> | undefined
+
+/**
+ * Detect the GCP project ID from the metadata server. Returns undefined
+ * on any failure (DNS, timeout, non-2xx response, not running on GCP).
+ *
+ * Cached: subsequent calls return the same result without retrying.
+ * The 200ms timeout prevents non-GCP environments from blocking.
+ */
+async function detectProjectFromMetadata(): Promise<string | undefined> {
+  if (metadataProjectCache) return metadataProjectCache.value
+  if (metadataDetectionInFlight) return metadataDetectionInFlight
+
+  metadataDetectionInFlight = (async () => {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), METADATA_TIMEOUT_MS)
+    try {
+      const res = await fetch(METADATA_URL, {
+        headers: { "Metadata-Flavor": "Google" },
+        signal: controller.signal,
+      })
+      if (!res.ok) {
+        metadataProjectCache = { value: undefined }
+        return undefined
+      }
+      const text = (await res.text()).trim()
+      metadataProjectCache = { value: text || undefined }
+      return metadataProjectCache.value
+    } catch {
+      metadataProjectCache = { value: undefined }
+      return undefined
+    } finally {
+      clearTimeout(timer)
+      metadataDetectionInFlight = undefined
+    }
+  })()
+  return metadataDetectionInFlight
+}
+
+/**
+ * Reset the project detection cache. Test-only.
+ *
+ * @internal
+ */
+export function _resetMetadataProjectCacheForTests(): void {
+  metadataProjectCache = undefined
+  metadataDetectionInFlight = undefined
+}
+
+/**
+ * Resolve project ID from explicit option or env vars (sync). Used at
+ * logger init and on every log call (cached).
+ */
 function resolveProject(opts?: GcpSinkOptions): string | undefined {
-  return opts?.project ?? process.env.GOOGLE_CLOUD_PROJECT ?? process.env.GCLOUD_PROJECT
+  return (
+    opts?.project ??
+    process.env.GOOGLE_CLOUD_PROJECT ??
+    process.env.GCLOUD_PROJECT ??
+    metadataProjectCache?.value
+  )
 }
 
 function resolveServiceName(opts?: GcpSinkOptions): string {
@@ -213,7 +299,18 @@ function parseCallerFrame(stack: string | undefined): StackFrame | undefined {
  * Creates a GCP Cloud Logging-compatible sink.
  */
 export function createGcpSink(opts?: GcpSinkOptions): Sink {
-  const project = resolveProject(opts)
+  // Project resolution: sync at write time so each log call sees the
+  // latest cache. The async metadata-server detection (kicked off below)
+  // populates the cache; logs emitted before detection completes fall
+  // back to env vars or omit the trace prefix.
+  const initialProject = resolveProject(opts)
+
+  // Kick off metadata-server detection unless the project is already
+  // known (explicit option or env var) OR auto-detection is disabled.
+  if (!initialProject && opts?.projectAutoDetect !== false) {
+    // Fire-and-forget. Errors are swallowed inside detectProjectFromMetadata.
+    void detectProjectFromMetadata()
+  }
   const serviceName = resolveServiceName(opts)
   const serviceVersion = resolveServiceVersion(opts)
   const labelKeys = new Set(opts?.labelKeys ?? [])
@@ -228,6 +325,11 @@ export function createGcpSink(opts?: GcpSinkOptions): Sink {
       }
 
       const remaining = { ...fields }
+
+      // Project ID resolved at write time so async metadata-server
+      // detection populates the cache between createGcpSink() and the
+      // first log call without missing trace correlation.
+      const project = resolveProject(opts)
 
       // Trace correlation.
       if (project && remaining.trace_id) {
