@@ -280,7 +280,7 @@ import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
 setGlobalLogger(createGcpLogger({ name: "myservice" }))
 ```
 
-Project ID resolves automatically via `GOOGLE_CLOUD_PROJECT` env (Cloud Run sets it), then the GCP metadata server (Cloud Run, GKE, GCE, App Engine). Pass `project:` explicitly to skip detection. Pass `projectAutoDetect: false` to disable the metadata fetch.
+Project ID resolves automatically via `GOOGLE_CLOUD_PROJECT` env (Cloud Run sets it), then the GCP metadata server via [`gcp-metadata`](https://www.npmjs.com/package/gcp-metadata) (Cloud Run, GKE, GCE, App Engine). Pass `project:` explicitly to skip detection. Pass `projectAutoDetect: false` to disable the metadata fetch.
 
 ## Hono middleware
 

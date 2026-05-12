@@ -33,7 +33,7 @@ Project (for trace correlation):
 1. `opts.project`
 2. `GOOGLE_CLOUD_PROJECT` (App Engine, Cloud Functions, gcloud CLI)
 3. `GCLOUD_PROJECT` (legacy)
-4. GCP metadata server `http://metadata.google.internal` (Cloud Run, GKE, GCE, App Engine flex). Async detection at logger init with a 200ms timeout. Result cached for the process lifetime (success and failure). Disable with `projectAutoDetect: false`.
+4. GCP metadata server via [`gcp-metadata`](https://www.npmjs.com/package/gcp-metadata). Cloud Run, GKE, GCE, App Engine flex. 200ms timeout. Result cached for the process lifetime (success and failure both cached). Disable with `projectAutoDetect: false`. The library is Google's official Node client for `metadata.google.internal`; it also handles the `GCE_METADATA_HOST` env override for local emulation.
 
 Service name (for Error Reporting):
 
