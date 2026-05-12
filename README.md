@@ -4,11 +4,11 @@ Structured logging with guaranteed metrics. A Node port of [dio/logging](https:/
 
 ## Features
 
-- **Metrics fire even when logs are silenced** — the core guarantee
-- **Built on [pino](https://getpino.io)** — fast, JSON-native structured logging
-- **OpenTelemetry Context integration** — automatic trace correlation, no explicit ctx threading
-- **Next.js first-class** — works on both Node and Edge runtimes
-- **TypeScript-first** — full type safety
+- **Metrics fire even when logs are silenced.** The core guarantee
+- **Built on [pino](https://getpino.io)**. Fast, JSON-native structured logging
+- **OpenTelemetry Context integration**. Automatic trace correlation, no explicit ctx threading
+- **Next.js first-class**. Works on both Node and Edge runtimes
+- **TypeScript-first**. Full type safety
 
 ## Install
 
@@ -21,7 +21,7 @@ yarn add @tetratelabs/logging pino
 ## Quick start
 
 ```ts
-import { createLogger, log, withAttrs } from "@tetratelabs/logging"
+import { createLogger, log, withAttrs, withLogAttrs } from "@tetratelabs/logging"
 import { metrics } from "@opentelemetry/api"
 
 // Create a logger (or use the global singleton)
@@ -34,9 +34,14 @@ logger.info({ user_id: "123", provider: "google" }, "user signin")
 const requests = metrics.getMeter("myapp").createCounter("requests_total")
 logger.metric(requests).info("handled")
 
-// Context-scoped attributes (flows to logs + metrics)
-await withAttrs({ request_id: req.id }, async () => {
-  logger.info("processing") // includes request_id
+// Bounded attrs (logs AND metric labels) for customer, region, env, role
+await withAttrs({ customer: "acme" }, async () => {
+  logger.info("processing") // log + metric labels both include customer
+})
+
+// Unbounded attrs (logs only, NEVER on metric labels) for request_id, user_id, ip
+await withLogAttrs({ request_id: req.id }, async () => {
+  logger.info("processing") // log includes request_id; counters do not
 })
 
 // Or use the global singleton
@@ -151,14 +156,14 @@ The fix is keeping unbounded values strictly off counters. Two scopes encode thi
 ### Anti-pattern (this used to ship)
 
 ```ts
-// WRONG — request_id leaks to every counter label as a cardinality bomb.
+// WRONG: request_id leaks to every counter label as a cardinality bomb.
 await withAttrs({ request_id, customer_id }, async () => {
   log.metric(orders).info("order placed")
 })
 ```
 
 ```ts
-// RIGHT — bounded labels and unbounded fields kept separate.
+// RIGHT: bounded labels and unbounded fields kept separate.
 await withAttrs({ customer_id }, async () => {
   await withLogAttrs({ request_id }, async () => {
     log.metric(orders).info("order placed")
@@ -170,21 +175,22 @@ The Hono middleware (`@tetratelabs/logging/hono`) handles this split automatical
 
 ## When to use what
 
-The library gives you three ways to attach attributes. Pick deliberately — `withAttrs` is the most powerful but also the most intrusive.
+The library gives you four ways to attach attributes. Pick deliberately. The first thing to decide is whether your attribute is bounded (safe on metric labels) or unbounded (logs only).
 
-| You want…                                                                        | Use                            | Example                                                     |
-| -------------------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------- |
-| Attach attrs to **one log line**                                                 | per-call `attrs` arg           | `log.info({ user_id }, "ok")`                               |
-| Attach attrs to **many calls in the same function**                              | `log.with(...)` (child logger) | `const reqLog = log.with({ request_id }); reqLog.info(...)` |
-| Attach attrs to **everything downstream**, including async fns you don't control | `withAttrs(...)`               | middleware sets `request_id`, every nested log inherits it  |
+| You want…                                                                            | Use                            | Example                                                                        |
+| ------------------------------------------------------------------------------------ | ------------------------------ | ------------------------------------------------------------------------------ |
+| Attach attrs to **one log line**                                                     | per-call `attrs` arg           | `log.info({ user_id }, "ok")`                                                  |
+| Attach attrs to **many calls in the same function**                                  | `log.with(...)` (child logger) | `const reqLog = log.with({ request_id }); reqLog.info(...)`                    |
+| Attach **bounded** attrs to everything downstream (logs + metric labels)             | `withAttrs(...)`               | middleware sets `customer`, every nested log + metric inherits it              |
+| Attach **unbounded** attrs to everything downstream (logs only, never metric labels) | `withLogAttrs(...)`            | middleware sets `request_id`, every nested log inherits it but counters do not |
 
 ### Rule of thumb
 
-> **Use `withAttrs` only at boundaries** — middleware, route handlers, the top of a request — where you set request-scoped attrs (`request_id`, `tenant`, `user_id`) **once**. Everywhere else, prefer plain `log.info(msg, attrs)` or `log.with(attrs)`.
+> **Use `withAttrs` and `withLogAttrs` only at boundaries** (middleware, route handlers, the top of a request) where you set request-scoped attrs **once**. Everywhere else, prefer plain `log.info(msg, attrs)` or `log.with(attrs)`.
 
-In practice this means **your business code almost never writes `withAttrs` directly**. The Hono middleware (`@tetratelabs/logging/hono`) wraps the chain for you; in Next.js you write it once per request boundary.
+In practice this means **your business code almost never writes either directly**. The Hono middleware (`@tetratelabs/logging/hono`) wraps the chain for you with the bounded/unbounded split already done; in Next.js you write it once per request boundary.
 
-### Why `withAttrs` is intrusive
+### Why they're intrusive
 
 It's worth knowing what you're trading for the convenience:
 
@@ -193,20 +199,20 @@ It's worth knowing what you're trading for the convenience:
 3. **Small but real overhead.** AsyncLocalStorage adds ~50–200 ns per `await`. Negligible for HTTP services; measurable in hot loops doing 100k+ awaits/sec.
 4. **Hidden control flow.** A log line in `loadUser` mysteriously has `tenant=acme` attached. Great for ops, surprising for new readers.
 
-### When to skip `withAttrs` entirely
+### When to skip both entirely
 
 ```ts
-// ❌ Overkill — the attr is only used once.
-await withAttrs({ user_id }, async () => {
+// ❌ Overkill: the attr is only used once.
+await withLogAttrs({ user_id }, async () => {
   log.info("user fetched")
 })
 
 // ✅ Just pass it directly.
 log.info({ user_id }, "user fetched")
 
-// ❌ Overkill — used in one function, no nested awaits that need it.
+// ❌ Overkill: used in one function, no nested awaits that need it.
 async function loadUser(id: string) {
-  return await withAttrs({ user_id: id }, async () => {
+  return await withLogAttrs({ user_id: id }, async () => {
     const row = await db.users.find(id)
     log.info({ row_count: row ? 1 : 0 }, "loaded")
     return row
@@ -222,36 +228,36 @@ async function loadUser(id: string) {
 }
 ```
 
-### When `withAttrs` earns its keep
+### When `withAttrs` and `withLogAttrs` earn their keep
 
 ```ts
-// Middleware sets request-scoped attrs ONCE.
+// Middleware sets request-scoped attrs ONCE, with the bounded/unbounded split.
 app.use(async (c, next) => {
-  await withAttrs(
-    {
-      request_id: c.req.header("x-request-id") ?? crypto.randomUUID(),
-      tenant: c.req.header("x-tenant") ?? "default",
-    },
-    () => next(),
-  )
+  // Bounded: customer is a small enum, safe on metric labels.
+  await withAttrs({ customer: c.req.header("x-customer") ?? "unknown" }, async () => {
+    // Unbounded: request_id is per-request, must stay off counter labels.
+    await withLogAttrs({ request_id: c.req.header("x-request-id") ?? crypto.randomUUID() }, () =>
+      next(),
+    )
+  })
 })
 
-// 20 layers down, in a util you didn't write,
-// this log line automatically has request_id + tenant attached.
-// Same for any metric .add() call inside.
+// 20 layers down, in a util you didn't write:
+// log line gets customer + request_id; counter labels get customer only.
 log.info("cache miss")
+log.metric(misses).info("cache miss")
 ```
 
 This is the only pattern where the indentation cost is paid by _one_ file (the middleware) and _zero_ business code.
 
 ### Already covered for you
 
-You get this for free, without writing `withAttrs` yourself:
+You get this for free, without writing `withAttrs` / `withLogAttrs` yourself:
 
-- **Hono**: `app.use(loggingMiddleware())` from `@tetratelabs/logging/hono` wraps every request.
-- **Next.js**: Use `withAttrs` once in `middleware.ts` or at the top of an RSC; everything below inherits it.
+- **Hono**: `app.use(loggingMiddleware())` from `@tetratelabs/logging/hono` wraps every request with the cardinality split already enforced (`metricAttrs` for bounded, `logAttrs` for unbounded). See [docs/hono.md](./docs/hono.md).
+- **Next.js**: use `withLogAttrs` once in `middleware.ts` for `request_id`/`path`; everything below inherits it. See [examples/nextjs/README.md](./examples/nextjs/README.md).
 
-If neither boundary feels natural for your service, you probably don't need `withAttrs` at all — just use `log.with(...)` to build a request-scoped child logger and pass it down.
+If neither boundary feels natural for your service, you probably don't need either function. Just use `log.with(...)` to build a request-scoped child logger and pass it down.
 
 ### Global logger
 
@@ -264,22 +270,17 @@ setGlobalLogger(createLogger({ name: "app" }))
 
 ## GCP / Cloud Logging
 
-See [docs/gcp.md](./docs/gcp.md) for the full GCP adapter docs: severity mapping, trace correlation, Error Reporting payloads, structured fields (`httpRequest`, `operation`, `labelKeys`, `sourceLocation`, `trace_sampled`), and Cloud Run / GKE deployment patterns.
+See [docs/gcp.md](./docs/gcp.md) for the full GCP adapter docs: severity mapping, trace correlation, Error Reporting payloads, structured fields (`httpRequest`, `operation`, `labelKeys`, `sourceLocation`, `trace_sampled`), project auto-detection, and Cloud Run / GKE deployment patterns.
 
 Short version:
 
 ```ts
 import { createGcpLogger, setGlobalLogger } from "@tetratelabs/logging/gcp"
 
-setGlobalLogger(
-  createGcpLogger({
-    name: "myservice",
-    project: process.env.GOOGLE_CLOUD_PROJECT,
-  }),
-)
+setGlobalLogger(createGcpLogger({ name: "myservice" }))
 ```
 
-On Cloud Run, omit `project` and the sink reads `GOOGLE_CLOUD_PROJECT` from env (Cloud Run sets it). On GKE, wire it through the Downward API. See [docs/gcp.md](./docs/gcp.md) for the full pattern.
+Project ID resolves automatically via `GOOGLE_CLOUD_PROJECT` env (Cloud Run sets it), then the GCP metadata server (Cloud Run, GKE, GCE, App Engine). Pass `project:` explicitly to skip detection. Pass `projectAutoDetect: false` to disable the metadata fetch.
 
 ## Hono middleware
 
@@ -301,4 +302,4 @@ See [RATIONALE.md](./RATIONALE.md) for the full story: metric-before-level order
 
 ## License
 
-Apache License 2.0 — see [LICENSE](./LICENSE)
+Apache License 2.0. See [LICENSE](./LICENSE)
