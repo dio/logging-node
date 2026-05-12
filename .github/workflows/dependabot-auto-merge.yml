@@ -1,0 +1,76 @@
+name: Dependabot auto-merge
+
+# Auto-merge Dependabot PRs for safe updates (patch + minor for dev/test/CI deps;
+# patch only for runtime deps). Major bumps and runtime-minor bumps stay manual.
+#
+# Mechanism:
+#   1. Dependabot opens a PR and the CI workflow runs against it.
+#   2. This workflow inspects the update metadata and, if it matches the safe-list,
+#      enables GitHub's native auto-merge on the PR.
+#   3. Auto-merge waits for required status checks, then squash-merges.
+#
+# Major bumps and runtime-dep minors are NEVER auto-merged — a human must review.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@d7267f607e9d3fb96fc2fbe83e0af444713e90b7 # v2.4.0
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Decide if this PR is safe to auto-merge
+        id: decide
+        env:
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEP_TYPE: ${{ steps.meta.outputs.dependency-type }}
+        run: |
+          echo "update-type=$UPDATE_TYPE"
+          echo "dependency-type=$DEP_TYPE"
+          # Never auto-merge majors. Always require human review.
+          if [ "$UPDATE_TYPE" = "version-update:semver-major" ]; then
+            echo "auto=false" >> "$GITHUB_OUTPUT"
+            echo "Reason: major bump — manual review required."
+            exit 0
+          fi
+          # Dev/test/CI deps: auto-merge patch + minor.
+          if [ "$DEP_TYPE" = "direct:development" ] || [ "$DEP_TYPE" = "indirect" ]; then
+            echo "auto=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Runtime deps (direct:production): auto-merge ONLY patch.
+          if [ "$DEP_TYPE" = "direct:production" ] && [ "$UPDATE_TYPE" = "version-update:semver-patch" ]; then
+            echo "auto=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "auto=false" >> "$GITHUB_OUTPUT"
+          echo "Reason: runtime-minor or unknown classification — manual review required."
+
+      - name: Enable auto-merge
+        if: steps.decide.outputs.auto == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+      - name: Comment on PRs not auto-merged
+        if: steps.decide.outputs.auto != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          DEP_TYPE: ${{ steps.meta.outputs.dependency-type }}
+        run: |
+          gh pr comment "$PR_URL" --body \
+            "🛑 Auto-merge skipped: \`update-type=$UPDATE_TYPE\`, \`dependency-type=$DEP_TYPE\`. Manual review required (this is intentional — see \`.github/workflows/dependabot-auto-merge.yml\`)."
