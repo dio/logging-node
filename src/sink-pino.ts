@@ -4,7 +4,15 @@ import { toPinoLevel } from "./levels.js"
 import type { Sink, SinkOptions } from "./sink.js"
 
 export function createPinoSink(opts?: SinkOptions): Sink {
-  const pinoInstance = pino(opts?.pino ?? {})
+  // Thread the wrapper level into pino. Without this, pino defaults to
+  // "info" and silently drops debug records even when the wrapper would
+  // let them through, leaving the caller wondering why LOG_LEVEL=debug
+  // produces no debug output. An explicit `opts.pino.level` still wins.
+  const pinoOpts = { ...(opts?.pino ?? {}) }
+  if (opts?.level && pinoOpts.level === undefined) {
+    pinoOpts.level = toPinoLevel(opts.level)
+  }
+  const pinoInstance = pino(pinoOpts)
 
   return {
     write(level: Level, msg: string, fields: Record<string, unknown>) {
