@@ -68,8 +68,8 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { registerOTel } = await import("@vercel/otel")
     registerOTel({ serviceName: "myapp" })
-    const { createLogger, setGlobalLogger } = await import("@tetratelabs/logging")
-    setGlobalLogger(createLogger({ name: "myapp", level: process.env.LOG_LEVEL ?? "info" }))
+    const { createLogger, setGlobalLogger, parseLevel } = await import("@tetratelabs/logging")
+    setGlobalLogger(createLogger({ name: "myapp", level: parseLevel(process.env.LOG_LEVEL) }))
   }
 }
 ```
@@ -98,6 +98,17 @@ interface LoggerOptions {
   pino?: PinoOptions // Node runtime only
 }
 ```
+
+The `level` you pass is threaded into the underlying pino sink, so
+`createLogger({ level: "debug" })` actually emits debug records on the
+default stream. An explicit `pino.level` still wins if you set both.
+
+### `parseLevel(value?)`
+
+Accepts a string (typically `process.env.LOG_LEVEL`) and returns a valid
+`Level`. Unknown values fall back to `"info"` rather than silencing the
+logger. Pino aliases are mapped for ergonomics: `"trace"` → `"debug"`,
+`"fatal"` → `"error"`.
 
 ### Logger methods
 

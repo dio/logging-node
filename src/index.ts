@@ -12,6 +12,7 @@ export {
 } from "./context.js"
 export type { OperationInfo } from "./context.js"
 export { getGlobalLogger, setGlobalLogger, log } from "./global.js"
+export { parseLevel } from "./levels.js"
 
 import { context } from "@opentelemetry/api"
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks"

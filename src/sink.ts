@@ -6,6 +6,7 @@ export interface Sink {
 
 export interface SinkOptions {
   name?: string
+  level?: Level
   pino?: any
 }
 

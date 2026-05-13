@@ -12,6 +12,7 @@ export {
 } from "./context.js"
 export type { OperationInfo } from "./context.js"
 export { getGlobalLogger, setGlobalLogger, log } from "./global.js"
+export { parseLevel } from "./levels.js"
 
 import { LoggerImpl } from "./logger.js"
 import type { LoggerOptions, Logger } from "./types.js"
