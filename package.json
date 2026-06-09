@@ -74,7 +74,7 @@
     "e2e": "vitest run -c e2e/vitest.config.ts"
   },
   "dependencies": {
-    "@opentelemetry/context-async-hooks": "^1.27",
+    "@opentelemetry/context-async-hooks": "^2.7",
     "gcp-metadata": "^8.1.2",
     "pino": "^9"
   },
@@ -89,9 +89,9 @@
   },
   "devDependencies": {
     "@opentelemetry/api": "^1.9",
-    "@opentelemetry/resources": "^1.27",
-    "@opentelemetry/sdk-metrics": "^1.27",
-    "@opentelemetry/sdk-trace-base": "^1.27",
+    "@opentelemetry/resources": "^2.7",
+    "@opentelemetry/sdk-metrics": "^2.7",
+    "@opentelemetry/sdk-trace-base": "^2.7",
     "@types/node": "^22",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
