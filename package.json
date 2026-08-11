@@ -75,7 +75,7 @@
   },
   "dependencies": {
     "@opentelemetry/context-async-hooks": "^1.27",
-    "gcp-metadata": "^8.1.2",
+    "gcp-metadata": "^9.0.1",
     "pino": "^9"
   },
   "peerDependencies": {
